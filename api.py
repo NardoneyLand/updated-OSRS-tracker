@@ -10,11 +10,13 @@ from typing import Optional
 
 import requests
 
+import paths
+
 API_BASE = "https://prices.runescape.wiki/api/v1/osrs"
 HEADERS = {
     "User-Agent": "OSRS Price Tracker - personal project, @nardoneyland on discord"
 }
-MAPPING_FILE = "mapping.json"
+MAPPING_FILE = paths.data_file("mapping.json")
 MAPPING_MAX_AGE = 604_800  # 7 days
 
 
@@ -73,6 +75,23 @@ def get_all_latest_prices() -> dict:
     """Bulk fetch — returns {item_id_str: {high, low, ...}} for every item."""
     try:
         r = requests.get(f"{API_BASE}/latest", headers=HEADERS, timeout=20)
+        r.raise_for_status()
+        return r.json().get("data", {})
+    except Exception:
+        return {}
+
+
+def get_bulk_average(timestep: str = "1h") -> dict:
+    """
+    Bulk averaged prices + volumes for ALL items in the most recent window.
+    timestep: '5m' | '1h' | '6h' | '24h'
+    Returns {item_id_str: {avgHighPrice, avgLowPrice, highPriceVolume, lowPriceVolume}}
+    """
+    valid = {"5m", "1h", "6h", "24h"}
+    if timestep not in valid:
+        raise ValueError(f"timestep must be one of {sorted(valid)}")
+    try:
+        r = requests.get(f"{API_BASE}/{timestep}", headers=HEADERS, timeout=25)
         r.raise_for_status()
         return r.json().get("data", {})
     except Exception:

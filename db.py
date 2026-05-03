@@ -6,7 +6,9 @@ import sqlite3
 import time
 from typing import Optional, List, Tuple
 
-DB_NAME = "osrs_tracker.db"
+import paths
+
+DB_NAME = paths.data_file("osrs_tracker.db")
 
 
 def get_connection() -> sqlite3.Connection:

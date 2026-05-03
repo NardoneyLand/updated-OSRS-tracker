@@ -214,3 +214,70 @@ def get_prediction(trend: dict, timeseries: list) -> dict:
         "recent_vol":  int(recent_vol),
         "momentum":    momentum,
     }
+
+
+# ── Volatility scanner ────────────────────────────────────────────────────────
+
+def find_volatile_items(
+    latest: dict,
+    bulk_avg: dict,
+    mapping: list,
+    min_volume: int = 1000,
+    top_n: int = 100,
+) -> list:
+    """
+    Identify items with the largest mid-price movement.
+
+    Compares the current /latest mid-price to the windowed average mid-price
+    from a bulk endpoint (/5m, /1h, /6h, /24h). Filters items whose total
+    volume in the window is below `min_volume` to suppress noise from
+    illiquid items where a single trade can swing the price.
+
+    Returns a list of dicts (sorted by abs(pct_change) desc):
+        {item_id, name, current, avg, pct_change, volume}
+    """
+    name_by_id = {item["id"]: item["name"] for item in mapping}
+    results = []
+
+    for item_id_str, current in latest.items():
+        try:
+            item_id = int(item_id_str)
+        except (TypeError, ValueError):
+            continue
+
+        avg_data = bulk_avg.get(item_id_str)
+        if not avg_data:
+            continue
+
+        vol = ((avg_data.get("highPriceVolume") or 0)
+               + (avg_data.get("lowPriceVolume") or 0))
+        if vol < min_volume:
+            continue
+
+        cur_high = current.get("high")
+        cur_low = current.get("low") or cur_high
+        if not cur_high:
+            continue
+        cur_mid = (cur_high + cur_low) / 2
+
+        avg_high = avg_data.get("avgHighPrice")
+        avg_low = avg_data.get("avgLowPrice") or avg_high
+        if not avg_high:
+            continue
+        avg_mid = (avg_high + avg_low) / 2
+        if avg_mid == 0:
+            continue
+
+        pct = (cur_mid - avg_mid) / avg_mid * 100
+
+        results.append({
+            "item_id":    item_id,
+            "name":       name_by_id.get(item_id, f"Item #{item_id}"),
+            "current":    int(cur_mid),
+            "avg":        int(avg_mid),
+            "pct_change": round(pct, 2),
+            "volume":     int(vol),
+        })
+
+    results.sort(key=lambda r: abs(r["pct_change"]), reverse=True)
+    return results[:top_n]

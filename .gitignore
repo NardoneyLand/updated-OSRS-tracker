@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtualenv
+.venv/
+venv/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Generated icons
+icon.icns
+icon.iconset/
+
+# Local data (regenerated at runtime)
+mapping.json
+osrs_tracker.db
+osrs_tracker.db-journal
+
+# macOS noise
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

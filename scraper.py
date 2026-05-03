@@ -1,13 +1,20 @@
 """
 scraper.py — Scrape OSRS news/update sources for price-affecting information.
 
-Add your own sources to CUSTOM_SOURCES below, or pass them into scrape_all().
+Add your own sources to SOURCES below, or pass them into scrape_all().
 Each source dict needs:
     name             — display label
-    url              — page to scrape
+    url              — page to scrape (HTML or RSS/Atom feed)
     article_selector — CSS selector for article containers
     title_selector   — CSS selector for headline (relative to article)
     link_selector    — CSS selector for <a> tag  (relative to article)
+
+Example HTML source (commented):
+    {"name": "GE Tracker Blog",
+     "url": "https://www.ge-tracker.com/blog",
+     "article_selector": "article",
+     "title_selector": "h2",
+     "link_selector": "a"}
 """
 
 import time
@@ -23,34 +30,14 @@ SCRAPE_HEADERS = {
     )
 }
 
-# ── Built-in sources ──────────────────────────────────────────────────────────
-DEFAULT_SOURCES: List[Dict] = [
+SOURCES: List[Dict] = [
     {
-        "name":             "OSRS Official News",
-        "url":              "https://oldschool.runescape.com/news",
-        "article_selector": ".news-article",
-        "title_selector":   ".news-article__title",
-        "link_selector":    "a",
-    },
-    {
-        "name":             "Old School RuneScape Subreddit (RSS)",
-        "url":              "https://www.reddit.com/r/2007scape/.rss",
-        "article_selector": "entry",
+        "name":             "OSRS Official News (RSS)",
+        "url":              "https://secure.runescape.com/m=news/latest_news.rss?oldschool=1",
+        "article_selector": "item",
         "title_selector":   "title",
         "link_selector":    "link",
     },
-]
-
-# ── Add your own sources here ─────────────────────────────────────────────────
-CUSTOM_SOURCES: List[Dict] = [
-    # Example:
-    # {
-    #     "name":             "GE Tracker Blog",
-    #     "url":              "https://www.ge-tracker.com/blog",
-    #     "article_selector": "article",
-    #     "title_selector":   "h2",
-    #     "link_selector":    "a",
-    # },
 ]
 
 
@@ -70,7 +57,14 @@ def scrape_source(source: Dict, max_articles: int = 5) -> List[Dict]:
     try:
         r = requests.get(source["url"], headers=SCRAPE_HEADERS, timeout=15)
         r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
+        # XML parser for RSS/Atom feeds, html.parser for HTML pages
+        url_lower = source["url"].lower()
+        is_feed = url_lower.endswith((".rss", ".xml")) or "rss" in url_lower
+        parser = "xml" if is_feed else "html.parser"
+        try:
+            soup = BeautifulSoup(r.text, parser)
+        except Exception:
+            soup = BeautifulSoup(r.text, "html.parser")
 
         articles = soup.select(source["article_selector"])[:max_articles]
         for article in articles:
@@ -78,7 +72,13 @@ def scrape_source(source: Dict, max_articles: int = 5) -> List[Dict]:
             link_el  = article.select_one(source["link_selector"])
 
             title = title_el.get_text(strip=True) if title_el else "No title"
-            href  = (link_el.get("href") or link_el.get("src") or "") if link_el else ""
+            # Handle Atom <link href="..."/> AND RSS <link>url</link>
+            href  = ""
+            if link_el:
+                href = (link_el.get("href")
+                        or link_el.get("src")
+                        or link_el.get_text(strip=True)
+                        or "")
             url   = _make_absolute(href, source["url"]) if href else source["url"]
 
             # Grab readable preview text (strip scripts/styles first)
@@ -93,8 +93,10 @@ def scrape_source(source: Dict, max_articles: int = 5) -> List[Dict]:
                 "content": snippet,
             })
 
-    except Exception as exc:
-        print(f"[scraper] Could not scrape '{source['name']}': {exc}")
+    except Exception:
+        # Silent fail — caller treats empty result as "no articles".
+        # In the bundled .app there's no terminal to receive prints anyway.
+        pass
 
     return results
 
@@ -104,7 +106,7 @@ def scrape_all(extra_sources: List[Dict] = None, delay: float = 1.5) -> List[Dic
     Scrape all sources and return a flat list of article dicts.
     Adds a polite delay between requests.
     """
-    sources = DEFAULT_SOURCES + CUSTOM_SOURCES + (extra_sources or [])
+    sources = SOURCES + (extra_sources or [])
     all_articles: List[Dict] = []
     for source in sources:
         all_articles.extend(scrape_source(source))

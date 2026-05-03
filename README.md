@@ -1,113 +1,106 @@
 # OSRS Price Tracker
 
-A command-line tool for tracking Old School RuneScape item prices, trends,
-alerts, and market predictions — buildable as a standalone Windows .exe.
+A desktop app for tracking Old School RuneScape Grand Exchange prices,
+spotting volatile movers, and following live game news. Tkinter GUI,
+distributed as a macOS `.app` bundle.
+
+Tabs: **Search** · **Alerts** · **Volatile** · **News** · **History** · **Help**
 
 ---
 
 ## Features
 
-| Feature | Details |
-|---|---|
-| **Live prices** | High / low GE prices via the OSRS Wiki API |
-| **Fuzzy search** | Finds items by partial name with smart scoring |
-| **Price history** | Snapshots stored in a local SQLite database |
-| **Trend analysis** | Rising / stable / falling with % change |
-| **10% alerts** | Fires whenever a price moves ≥ 10% since last check |
-| **Buy/Hold/Sell** | Scored from price direction + volume + momentum |
-| **News scraping** | Pulls headlines from OSRS official news & Reddit |
+- **Live price lookup** — autocomplete dropdown filters as you type. Search "Bandos" to see all Bandos items, narrow with "Bandos chest" to drill down.
+- **Buy / Hold / Sell signal** — heuristic score from price direction, volume, and momentum.
+- **Volatile scanner** — proactive sweep of every item on the GE for big movers, with sortable columns and a tunable time window (5m / 1h / 6h / 24h).
+- **Alert log** — every ≥10% mid-price swing on items you've looked up gets recorded.
+- **Live news** — pulls the official OSRS news RSS feed; double-click to open in your browser.
+- **Price history charts** — every snapshot you take is plotted on a native Tk canvas.
 
 ---
 
-## Quick Start
+## Install (end users)
+
+Grab the latest release from the [Releases page](https://github.com/NardoneyLand/updated-OSRS-tracker/releases) — pick the `.dmg` or `.zip`, drag `OSRS Tracker.app` to `/Applications`, done.
+
+First launch, macOS may flag the unsigned build. Right-click the app → **Open** → **Open** to allow it once.
+
+App data lives in `~/Library/Application Support/OSRS Tracker/`.
+
+---
+
+## Run from source (developers)
+
+Requires Homebrew Python 3.12 with Tk:
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Run
-python main.py
+brew install python@3.12 python-tk@3.12
+git clone https://github.com/NardoneyLand/updated-OSRS-tracker.git
+cd updated-OSRS-tracker
+./launch.sh
 ```
 
-### Commands inside the app
-
-```
-<item name>   Search for an item (e.g. "rune full helm", "dragon scimitar")
-alerts        Show the last 15 price alerts
-news          Show cached OSRS news headlines
-scrape        Fetch fresh news from configured sources
-help          Show command list
-quit          Exit
-```
+`launch.sh` creates a project-local `.venv`, installs deps, verifies Tk, and starts the GUI.
 
 ---
 
-## Building the .exe
+## Build the `.app`
 
 ```bash
-pip install pyinstaller
-pyinstaller --onefile --name OSRS_Tracker main.py
+./build.sh                # produces dist/OSRS Tracker.app
 ```
 
-The executable will be in the `dist/` folder.
-Copy `OSRS_Tracker.exe` anywhere — it carries everything it needs.
-`mapping.json` and `osrs_tracker.db` are created on first run in the same
-folder as the .exe.
+Optional icon: drop a square `icon.png` / `icon.jpg` at the project root before building. `build.sh` runs `make_icns.sh` to convert it to a Mac `.icns` and bundles it.
 
 ---
 
-## Adding your own news sources
+## Cut a release
 
-Open `scraper.py` and add entries to `CUSTOM_SOURCES`:
+One-time setup:
 
-```python
-CUSTOM_SOURCES = [
-    {
-        "name":             "GE Tracker Blog",
-        "url":              "https://www.ge-tracker.com/blog",
-        "article_selector": "article",
-        "title_selector":   "h2",
-        "link_selector":    "a",
-    },
-    # ... more sources
-]
+```bash
+brew install create-dmg gh
+gh auth login
 ```
+
+Then per release:
+
+```bash
+./release.sh v1.0.0
+```
+
+This builds the `.app`, packages it as both a `.zip` and a `.dmg`, and publishes to GitHub Releases under the given tag.
 
 ---
 
-## File layout
+## Project layout
 
 ```
-osrs_tracker/
-├── main.py          Entry point and CLI
-├── api.py           OSRS Wiki API wrapper
-├── db.py            SQLite helpers (price history, alerts, news)
-├── search.py        Fuzzy item search
-├── analyzer.py      Trend, alert, and prediction logic
-├── scraper.py       News scraper
-├── requirements.txt Python dependencies
-└── README.md        This file
+gui.py              Tkinter app — entry point
+api.py              OSRS Wiki Prices API wrapper
+db.py               SQLite layer (price history, alerts, news cache)
+search.py           Fuzzy item search
+analyzer.py         Trend, alert, prediction, volatility logic
+scraper.py          OSRS news RSS scraper
+paths.py            Resolves writable data directory (dev vs. bundled)
 
-Generated at runtime:
-├── mapping.json     Item list cache (refreshed every 7 days)
-└── osrs_tracker.db  SQLite database
+OSRS_Tracker.spec   PyInstaller config
+launch.sh           venv setup + run
+build.sh            venv setup + .app build
+release.sh          build + .zip + .dmg + (optional) GitHub publish
+make_icns.sh        Convert icon source to .icns
+requirements.txt    Python deps
 ```
 
 ---
 
-## API reference
+## API & news source
 
-All price data comes from the [OSRS Wiki Prices API](https://prices.runescape.wiki/osrs).
-No API key required. Please keep the User-Agent string identifying your app.
+- Prices: [OSRS Wiki Prices API](https://prices.runescape.wiki/) — public, no key, ~60s upstream refresh. Please keep the User-Agent string in `api.py` identifying your build.
+- News: official OSRS RSS at `secure.runescape.com/m=news/latest_news.rss?oldschool=1`.
 
 ---
 
-## Known bugs fixed from original code
+## Disclaimer
 
-1. **`name` variable shadowing** — the output was printing the last value of
-   the loop variable `name` instead of the matched item's name (`item_name`).
-2. **`user_input` prompt inside match loop** — the "Enter another item" prompt
-   fired after *each* match result rather than after all results were shown.
-3. **Score sorting with candidates subset** — substring candidates were
-   correctly pre-filtered but sometimes ranked worse than non-candidates would
-   have; fixed by isolating the scoring pool cleanly.
+Personal-use tool. Not affiliated with or endorsed by Jagex. Old School RuneScape and related marks are property of Jagex Ltd.

@@ -1,5 +1,4 @@
-# Python dependencies
 requests
-rich
 beautifulsoup4
+lxml
 pyinstaller
