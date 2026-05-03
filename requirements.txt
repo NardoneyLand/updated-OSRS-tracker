@@ -1,0 +1,5 @@
+# Python dependencies
+requests
+rich
+beautifulsoup4
+pyinstaller
