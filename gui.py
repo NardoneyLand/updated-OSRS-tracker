@@ -8,6 +8,7 @@ Build a Mac .app bundle:
     ./build.sh
 """
 
+import bisect
 import ctypes
 import os
 import subprocess
@@ -51,6 +52,8 @@ HISTORY_RANGES = [
     ("All",  None,        "24h"),
 ]
 HISTORY_DEFAULT_RANGE = "1W"
+STEP_SECONDS = {"5m": 300, "1h": 3600, "6h": 6 * 3600, "24h": 86400}
+CHART_MIN_POINTS = 4              # zooming stops at about this many points
 FLIP_MAX_ROWS = 300
 
 # Fantasy / OSRS-inspired palette (avoiding Jagex copyrighted colors directly)
@@ -303,7 +306,11 @@ HELP_SECTIONS = [
      "from the OSRS Wiki, so the chart is filled in even the first time "
      "you search an item. Short ranges use 5-minute data, 1W hourly, 1M "
      "6-hourly, and 1Y / All daily; All goes back about a year. Refresh "
-     "chart re-downloads it."),
+     "chart re-downloads it.\n\n"
+     "Zoom in: scroll the mouse wheel over the chart (it zooms around the "
+     "pointer), then drag left or right to move along. The price axis "
+     "rescales to what's in view. Double-click the chart or press Reset "
+     "zoom to see the whole range again."),
 
     ("BUY / HOLD / SELL — what they mean",
      "The Search signal is a rule of thumb, not financial advice. It "
@@ -601,7 +608,7 @@ class OSRSTrackerApp:
                   fieldbackground=[("readonly", COLOR_INPUT)],
                   foreground=[("readonly", COLOR_TEXT)])
 
-        # Time-range buttons (History tab)
+        # Time-range buttons (Search tab chart)
         style.configure("Range.TButton", padding=(10, 4))
         style.configure("RangeSel.TButton", padding=(10, 4),
                         background=COLOR_ACCENT, foreground=COLOR_BG)
@@ -770,6 +777,10 @@ class OSRSTrackerApp:
         self.history_range = HISTORY_DEFAULT_RANGE
         self.history_range_btns = {}
         self._history_fetched = set()     # (item_id, step) pulled this session
+        self._chart_rows = None           # rows for the item/range on screen
+        self._chart_view = None           # (t0, t1) when zoomed, else None
+        self._chart_geom = None           # plot layout, for mouse handlers
+        self._chart_drag = None           # (start x, view) while panning
 
         range_bar = ttk.Frame(frame)
         range_bar.pack(side="top", fill="x", padx=20, pady=(0, 6))
@@ -784,6 +795,9 @@ class OSRSTrackerApp:
         ttk.Button(range_bar, text="Refresh chart",
                    command=self._refresh_history_chart
                    ).pack(side="left", padx=(12, 0))
+        ttk.Button(range_bar, text="Reset zoom",
+                   command=self._reset_chart_zoom
+                   ).pack(side="left", padx=(6, 0))
 
         chart_frame = ttk.Frame(frame, style="Panel.TFrame")
         chart_frame.pack(side="top", fill="both", expand=True,
@@ -795,6 +809,12 @@ class OSRSTrackerApp:
         # so the placeholder is centred at the real size.
         self.history_canvas.bind("<Configure>",
                                  lambda _e: self._draw_history_chart())
+        self.history_canvas.bind("<MouseWheel>", self._on_chart_wheel)
+        self.history_canvas.bind("<ButtonPress-1>", self._on_chart_press)
+        self.history_canvas.bind("<B1-Motion>", self._on_chart_drag)
+        self.history_canvas.bind("<ButtonRelease-1>", self._on_chart_release)
+        self.history_canvas.bind("<Double-Button-1>",
+                                 lambda _e: self._reset_chart_zoom())
 
         return frame
 
@@ -897,6 +917,7 @@ class OSRSTrackerApp:
         # hourly history itself, so mark it fetched (no duplicate request)
         # and draw once that data has arrived.
         self.history_item = (item_id, item_name)
+        self._chart_view = None
         self._history_fetched.add((item_id, TIMESERIES_STEP))
         self._history_placeholder(f"Loading {item_name} chart…")
 
@@ -1910,6 +1931,9 @@ class OSRSTrackerApp:
         return None if w <= 1 or h <= 1 else (w, h)
 
     def _history_placeholder(self, text: str):
+        # Nothing to zoom while a message is shown.
+        self._chart_rows = None
+        self._chart_geom = None
         size = self._chart_size()
         if not size:
             return
@@ -1925,6 +1949,7 @@ class OSRSTrackerApp:
 
     def _set_history_range(self, label: str):
         self.history_range = label
+        self._chart_view = None
         self._update_range_buttons()
         self._draw_history_chart()
 
@@ -1965,7 +1990,7 @@ class OSRSTrackerApp:
             return
         item_id, name = self.history_item
 
-        range_label, window, step = next(
+        _label, window, step = next(
             r for r in HISTORY_RANGES if r[0] == self.history_range)
         self._ensure_history_data(item_id, name, step)
 
@@ -1980,12 +2005,21 @@ class OSRSTrackerApp:
             self._history_placeholder(
                 "No price data for this range (it may still be loading).")
             return
+        self._chart_rows = history
+        self._render_chart()
 
-        times = [ts for _h, _l, ts in history]
-        highs = [h for h, _l, _ts in history]
-        lows  = [l for _h, l, _ts in history]
-        mids  = [((h or 0) + (l or 0)) / 2 if (h and l)
-                 else (h or l or 0) for h, l, _ts in history]
+    def _render_chart(self):
+        """Draw the stored rows, zoomed to self._chart_view if set.
+
+        Zooming and panning call this directly, so they redraw without
+        another database query.
+        """
+        history = self._chart_rows
+        if not history or not self.history_item:
+            return
+        name = self.history_item[1]
+        range_label, _window, step = next(
+            r for r in HISTORY_RANGES if r[0] == self.history_range)
 
         # Check the size before clearing, so a squeezed canvas keeps its
         # last drawing instead of going blank.
@@ -1993,8 +2027,6 @@ class OSRSTrackerApp:
         if not size or size[0] < 50 or size[1] < 50:
             return
         W, H = size
-        c = self.history_canvas
-        c.delete("all")
 
         ML, MR, MT, MB = 70, 30, 40, 60
         plot_w = W - ML - MR
@@ -2002,7 +2034,24 @@ class OSRSTrackerApp:
         if plot_w < 10 or plot_h < 10:
             return
 
-        all_vals = [v for v in (highs + lows + mids) if v]
+        times = [ts for _h, _l, ts in history]
+        full_min, full_max = times[0], times[-1]
+        t_min, t_max = self._chart_view or (full_min, full_max)
+
+        # Points inside the view, plus one either side so the lines run
+        # to the edges of the plot (the overhang is covered up below).
+        first = bisect.bisect_left(times, t_min)
+        last = bisect.bisect_right(times, t_max)
+        visible = history[first:last]
+        drawn = history[max(0, first - 1):last + 1]
+
+        def mid(h, l):
+            return (h + l) / 2 if (h and l) else (h or l or 0)
+
+        # Fit the price axis to what's in view, so zooming in on a flat
+        # stretch shows its detail.
+        all_vals = [v for h, l, _ts in (visible or drawn)
+                    for v in (h, l, mid(h, l)) if v]
         if not all_vals:
             self._history_placeholder("No usable price values.")
             return
@@ -2011,34 +2060,73 @@ class OSRSTrackerApp:
             pad = max(1, y_max * 0.05)
             y_min, y_max = y_min - pad, y_max + pad
 
-        n = len(history)
-        t_min, t_max = times[0], times[-1]
+        c = self.history_canvas
+        c.delete("all")
+        self._chart_geom = {
+            "left": ML, "width": plot_w, "view": (t_min, t_max),
+            "full": (full_min, full_max),
+            "min_span": CHART_MIN_POINTS * STEP_SECONDS.get(step, 3600),
+        }
 
-        def x_pos(i):
+        def x_pos(t):
             # Position by timestamp so mixed-resolution data stays to scale.
             if t_max == t_min:
                 return ML + plot_w / 2
-            return ML + ((times[i] - t_min) / (t_max - t_min)) * plot_w
+            return ML + ((t - t_min) / (t_max - t_min)) * plot_w
 
         def y_pos(v):
             return MT + plot_h - ((v - y_min) / (y_max - y_min)) * plot_h
 
+        # Y gridlines
+        grid_vals = [y_min + (y_max - y_min) * (i / 4) for i in range(5)]
+        for v in grid_vals:
+            y = y_pos(v)
+            c.create_line(ML, y, ML + plot_w, y,
+                          fill="#3a2818", dash=(2, 4))
+
+        # Plot lines
+        def plot_series(values, color, marker=False):
+            pts = []
+            for (_h, _l, ts), v in zip(drawn, values):
+                if not v:
+                    continue
+                x, y = x_pos(ts), y_pos(v)
+                pts.extend([x, y])
+                if marker:
+                    r = 2
+                    c.create_oval(x - r, y - r, x + r, y + r,
+                                  fill=color, outline=color)
+            if len(pts) >= 4:
+                c.create_line(pts, fill=color, width=2, smooth=False)
+
+        plot_series([h for h, _l, _ts in drawn], COLOR_GREEN, marker=True)
+        plot_series([l for _h, l, _ts in drawn], COLOR_RED, marker=True)
+        plot_series([mid(h, l) for h, l, _ts in drawn], COLOR_BLUE)
+
+        # Cover anything drawn outside the plot area (the lines out to the
+        # off-screen neighbours, or above/below the fitted price range).
+        for box in ((0, 0, ML, H), (ML + plot_w, 0, W, H),
+                    (0, 0, W, MT), (0, MT + plot_h, W, H)):
+            c.create_rectangle(*box, fill=COLOR_PANEL, outline="")
+
         # Title
+        zoomed = "  ·  zoomed" if self._chart_view else ""
         c.create_text(W / 2, MT / 2,
-                      text=f"{name}  —  {range_label}  ({n} points)",
+                      text=f"{name}  —  {range_label}  "
+                           f"({len(visible)} points){zoomed}",
                       fill=COLOR_ACCENT, font=("Georgia", 12, "bold"))
 
         # Axes
         c.create_line(ML, MT, ML, MT + plot_h, fill=COLOR_DIM)
         c.create_line(ML, MT + plot_h, ML + plot_w, MT + plot_h, fill=COLOR_DIM)
 
-        # Y gridlines + labels
-        for i in range(5):
-            v = y_min + (y_max - y_min) * (i / 4)
-            y = y_pos(v)
-            c.create_line(ML, y, ML + plot_w, y,
-                          fill="#3a2818", dash=(2, 4))
-            c.create_text(ML - 8, y, text=fmt_gp(int(v)),
+        # Y labels: short form, or exact gp when zoomed in so far that the
+        # short labels would repeat (e.g. "1.1K" twice).
+        y_labels = [fmt_gp(int(v)) for v in grid_vals]
+        if len(set(y_labels)) < len(y_labels):
+            y_labels = [fmt_gp_exact(round(v)) for v in grid_vals]
+        for v, text in zip(grid_vals, y_labels):
+            c.create_text(ML - 8, y_pos(v), text=text,
                           fill=COLOR_DIM, anchor="e", font=FONT_SMALL)
 
         # X tick labels
@@ -2058,25 +2146,6 @@ class OSRSTrackerApp:
             c.create_text(x, MT + plot_h + 18, text=label,
                           fill=COLOR_DIM, font=FONT_SMALL)
 
-        # Plot lines
-        def plot_series(values, color, marker=False):
-            pts = []
-            for i, v in enumerate(values):
-                if not v:
-                    continue
-                pts.extend([x_pos(i), y_pos(v)])
-                if marker:
-                    r = 2
-                    x, y = x_pos(i), y_pos(v)
-                    c.create_oval(x - r, y - r, x + r, y + r,
-                                  fill=color, outline=color)
-            if len(pts) >= 4:
-                c.create_line(pts, fill=color, width=2, smooth=False)
-
-        plot_series(highs, COLOR_GREEN, marker=True)
-        plot_series(lows, COLOR_RED, marker=True)
-        plot_series(mids, COLOR_BLUE)
-
         # Legend
         legend_x = ML + 8
         legend_y = MT + 8
@@ -2088,6 +2157,69 @@ class OSRSTrackerApp:
             c.create_text(legend_x + 24, legend_y, text=label,
                           fill=COLOR_TEXT, anchor="w", font=FONT_SMALL)
             legend_x += 64
+
+        c.create_text(W - MR, H - 8, anchor="se", fill=COLOR_DIM,
+                      font=FONT_SMALL,
+                      text="Scroll to zoom  ·  drag to pan  ·  "
+                           "double-click to reset")
+
+    # ── Chart zoom and pan ────────────────────────────────────────────────────
+
+    def _set_chart_view(self, t0: float, t1: float):
+        """Zoom to [t0, t1], kept inside the data; the full span un-zooms."""
+        full_min, full_max = self._chart_geom["full"]
+        span = t1 - t0
+        if span >= full_max - full_min:
+            self._chart_view = None
+        else:
+            t0 = min(max(t0, full_min), full_max - span)
+            self._chart_view = (t0, t0 + span)
+        self._render_chart()
+
+    def _reset_chart_zoom(self):
+        if self._chart_view is None:
+            return
+        self._chart_view = None
+        self._render_chart()
+
+    def _on_chart_wheel(self, event):
+        g = self._chart_geom
+        if not g or not event.delta:
+            return
+        full_min, full_max = g["full"]
+        full_span = full_max - full_min
+        if full_span <= 0:
+            return
+        # Windows sends ±120 per wheel notch; macOS sends small values,
+        # many per trackpad swipe, so each one zooms only a little.
+        if sys.platform == "darwin":
+            factor = 0.97 ** event.delta
+        else:
+            factor = 0.8 ** (event.delta / 120)
+        t0, t1 = g["view"]
+        span = (t1 - t0) * factor
+        span = max(span, min(g["min_span"], full_span))
+        # Keep the time under the cursor where it is.
+        frac = min(1.0, max(0.0, (event.x - g["left"]) / g["width"]))
+        anchor = t0 + (t1 - t0) * frac
+        start = anchor - span * frac
+        self._set_chart_view(start, start + span)
+
+    def _on_chart_press(self, event):
+        if self._chart_geom and self._chart_view:
+            self._chart_drag = (event.x, self._chart_view)
+            self.history_canvas.configure(cursor="fleur")
+
+    def _on_chart_drag(self, event):
+        if not self._chart_drag or not self._chart_geom:
+            return
+        x0, (t0, t1) = self._chart_drag
+        shift = -(event.x - x0) / self._chart_geom["width"] * (t1 - t0)
+        self._set_chart_view(t0 + shift, t1 + shift)
+
+    def _on_chart_release(self, _event):
+        self._chart_drag = None
+        self.history_canvas.configure(cursor="")
 
     # ── Help tab ──────────────────────────────────────────────────────────────
 
