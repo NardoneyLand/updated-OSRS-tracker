@@ -13,7 +13,12 @@
 #endif
 
 [Setup]
+; Fixed AppId: a newer installer upgrades the existing install in place
+; (same folder, data in %APPDATA% untouched).
 AppId={{6C1F0E64-5B1B-4C55-9B7E-0A5A1D3E7F21}
+; Close a running OSRS Tracker before replacing it (avoids "file in use").
+CloseApplications=force
+RestartApplications=no
 AppName=OSRS Tracker
 AppVersion={#AppVersion}
 AppPublisher=NardoneyLand
@@ -45,4 +50,6 @@ Name: "{group}\Uninstall OSRS Tracker"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\OSRS Tracker"; Filename: "{app}\OSRS Tracker.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\OSRS Tracker.exe"; Description: "Launch OSRS Tracker"; Flags: nowait postinstall skipifsilent
+; Not skipped in /SILENT mode, so "Check for updates" reopens the app after
+; updating. (Interactive installs still show this as a checkbox.)
+Filename: "{app}\OSRS Tracker.exe"; Description: "Launch OSRS Tracker"; Flags: nowait postinstall

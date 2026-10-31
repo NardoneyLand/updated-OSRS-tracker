@@ -9,6 +9,8 @@ Build a Mac .app bundle:
 """
 
 import ctypes
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -18,11 +20,14 @@ from tkinter import ttk, messagebox, scrolledtext
 
 import api
 import analyzer
+import applog
 import db
 import scraper
 import search as search_module
 import settings
+import updater
 import useragent
+from version import APP_VERSION
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -153,6 +158,8 @@ def run_async(root: tk.Tk, target, on_done):
             result = target()
             err = None
         except Exception as e:
+            applog.log.warning(f"Background task {target.__name__} failed",
+                               exc_info=True)
             result, err = None, e
         root.after(0, lambda: on_done(result, err))
     threading.Thread(target=worker, daemon=True).start()
@@ -337,6 +344,19 @@ HELP_SECTIONS = [
      "    •  Windows: %APPDATA%\\OSRS Tracker\n"
      "    •  macOS: ~/Library/Application Support/OSRS Tracker"),
 
+    ("Updates, logs and your data folder",
+     "The top of this tab shows your version and three tools:\n\n"
+     "    •  Check for updates — looks for a newer release on the project's "
+     "GitHub page. On Windows it downloads the installer, closes the app, "
+     "updates it and reopens it. On macOS it downloads and opens the disk "
+     "image: quit the app and drag the new version into Applications. "
+     "Only the app name and version are sent to GitHub.\n"
+     "    •  Open data folder — your settings, watchlist, alerts, price "
+     "history and log file.\n"
+     "    •  Log file (osrs_tracker.log) — if something goes wrong, the "
+     "details are saved here. Attach it when reporting a problem on the "
+     "project's GitHub Issues page."),
+
     ("Disclaimer",
      "Estimates only — offers can take time to fill and margins can "
      "close before they do. This is a personal-use tool. It is not "
@@ -359,6 +379,10 @@ class OSRSTrackerApp:
         self._monitor_busy = False
         self._search_item = None       # item shown in the Search panel
         self._lookup_seq = 0           # latest Search lookup (see _lookup_item)
+        self._error_shown = False
+        # Errors inside button clicks / timers: log them and tell the user
+        # once, instead of failing silently in the windowed app.
+        self.root.report_callback_exception = self._on_tk_error
 
         self._configure_root()
         self._build_ui()
@@ -2080,6 +2104,19 @@ class OSRSTrackerApp:
                    ).pack(side="left", padx=12)
         self._update_contact_label()
 
+        about = ttk.Frame(frame)
+        about.pack(fill="x", padx=20, pady=(10, 0))
+        ttk.Label(about, text=f"Version {APP_VERSION}", style="TLabel"
+                  ).pack(side="left")
+        self.update_btn = ttk.Button(about, text="Check for updates",
+                                     command=self._check_for_updates)
+        self.update_btn.pack(side="left", padx=12)
+        ttk.Button(about, text="Open data folder",
+                   command=self._open_data_folder).pack(side="left")
+        self.update_status = tk.StringVar(value="")
+        ttk.Label(about, textvariable=self.update_status, style="Dim.TLabel"
+                  ).pack(side="left", padx=12)
+
         text = scrolledtext.ScrolledText(
             frame, wrap="word",
             background=COLOR_PANEL, foreground=COLOR_TEXT,
@@ -2102,6 +2139,100 @@ class OSRSTrackerApp:
 
         text.configure(state="disabled")
         return frame
+
+    # ── About: updates, data folder, error reporting ──────────────────────────
+
+    def _check_for_updates(self):
+        self.update_btn.config(state="disabled")
+        self.update_status.set("Checking for updates…")
+
+        def done(rel, err):
+            self.update_btn.config(state="normal")
+            if err:
+                self.update_status.set(f"Update check failed: {err}")
+                return
+            if rel is None:
+                self.update_status.set("No releases have been published yet.")
+                return
+            if not updater.is_newer(rel["version"]):
+                self.update_status.set(
+                    f"You're on the latest version ({APP_VERSION}).")
+                return
+            self.update_status.set(f"Version {rel['version']} is available.")
+            self._offer_update(rel)
+
+        run_async(self.root, updater.latest_release, done)
+
+    def _offer_update(self, rel: dict):
+        newer = f"Version {rel['version']} is available (you have {APP_VERSION})."
+        if not updater.can_self_install() or not rel["asset"]:
+            # Running from source, or no download for this system.
+            if messagebox.askyesno("Update available",
+                                   f"{newer}\n\nOpen the download page?"):
+                webbrowser.open(rel["page"])
+            return
+        if sys.platform == "win32":
+            question = (f"{newer}\n\nDownload and install it now? The app "
+                        "will close, update itself and reopen.")
+        else:
+            question = (f"{newer}\n\nDownload it now? The disk image will "
+                        "open; quit OSRS Tracker and drag the new version to "
+                        "Applications to replace it.")
+        if not messagebox.askyesno("Update available", question):
+            return
+
+        self.update_btn.config(state="disabled")
+
+        def progress(done_bytes, total):
+            pct = f" {done_bytes * 100 // total}%" if total else ""
+            self.root.after(0, lambda: self.update_status.set(
+                f"Downloading {rel['asset']['name']}…{pct}"))
+
+        def finished(path, err):
+            self.update_btn.config(state="normal")
+            if err:
+                self.update_status.set(f"Update failed: {err}")
+                return
+            applog.log.info(f"Installing update {rel['tag']} from {path}")
+            try:
+                updater.launch_installer(path)
+            except Exception as exc:
+                applog.log.exception("Could not start the installer")
+                self.update_status.set(f"Couldn't start the installer: {exc}")
+                return
+            if sys.platform == "win32":
+                self.root.destroy()   # let the installer replace the app
+            else:
+                self.update_status.set("Update downloaded — drag it into "
+                                       "Applications, then reopen the app.")
+
+        run_async(self.root, lambda: updater.download(rel["asset"], progress),
+                  finished)
+
+    def _open_data_folder(self):
+        folder = os.path.dirname(applog.LOG_FILE)
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as exc:
+            messagebox.showinfo("Data folder", f"Your data is in:\n{folder}\n\n"
+                                f"(Couldn't open it automatically: {exc})")
+
+    def _on_tk_error(self, exc_type, exc, tb):
+        applog.log.error("Error in the user interface",
+                         exc_info=(exc_type, exc, tb))
+        if not self._error_shown:
+            self._error_shown = True
+            messagebox.showerror(
+                "Something went wrong",
+                f"{exc_type.__name__}: {exc}\n\nThe details were saved to the "
+                f"log file:\n{applog.LOG_FILE}\n\nYou can keep using the app. "
+                "If it keeps happening, please report it on the project's "
+                "GitHub Issues page and attach the log.")
 
     # ── Tab change handler ────────────────────────────────────────────────────
 
@@ -2130,6 +2261,7 @@ class OSRSTrackerApp:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
+    applog.setup()
     root = tk.Tk()
     app = OSRSTrackerApp(root)
     if app.ready:              # False if the user quit first-time setup

@@ -31,3 +31,7 @@ osrs_tracker.db-journal
 # IDE
 .vscode/
 .idea/
+
+# App log (dev runs write it to the project folder)
+*.log
+*.log.[0-9]

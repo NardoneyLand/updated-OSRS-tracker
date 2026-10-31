@@ -152,6 +152,17 @@ requirements.txt    Python deps
 
 ---
 
+## Updates and troubleshooting
+
+- **Help → Check for updates** looks for a newer GitHub release. On Windows it downloads the installer and updates the app in place; on macOS it opens the new `.dmg`.
+- **Help → Open data folder** opens your settings, watchlist, alerts, price history and `osrs_tracker.log`. If something goes wrong, attach that log to a GitHub issue.
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 NardoneyLand.
+
 ## Disclaimer
 
 Personal-use tool. Not affiliated with or endorsed by Jagex. Old School RuneScape and related marks are property of Jagex Ltd.
