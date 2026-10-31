@@ -73,6 +73,33 @@ def record_price(item_id: int, item_name: str, high: int, low: int):
     conn.close()
 
 
+def backfill_price_history(item_id: int, item_name: str, points: list) -> int:
+    """
+    Insert historical API timeseries points (avgHighPrice/avgLowPrice/timestamp)
+    that we don't already have. Returns the number of rows added.
+    """
+    rows = []
+    for pt in points:
+        ts = pt.get("timestamp")
+        high, low = pt.get("avgHighPrice"), pt.get("avgLowPrice")
+        if ts is None or (high is None and low is None):
+            continue
+        rows.append((item_id, item_name, high or low, low or high, int(ts)))
+    if not rows:
+        return 0
+
+    conn = get_connection()
+    existing = {r[0] for r in conn.execute(
+        "SELECT timestamp FROM price_history WHERE item_id = ?", (item_id,))}
+    new_rows = [r for r in rows if r[4] not in existing]
+    conn.executemany(
+        "INSERT INTO price_history (item_id, item_name, high_price, low_price, timestamp) "
+        "VALUES (?, ?, ?, ?, ?)", new_rows)
+    conn.commit()
+    conn.close()
+    return len(new_rows)
+
+
 def get_price_history(item_id: int, limit: int = 50) -> List[Tuple]:
     """Return rows (high, low, timestamp) newest-first."""
     conn = get_connection()

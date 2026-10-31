@@ -505,9 +505,13 @@ class OSRSTrackerApp:
                 db.record_alert(**alert)
             db.record_price(item_id, item_name, high, low)
 
+            # Pull historical points from the API so a first-time search
+            # already has history (deduped by timestamp).
+            ts_data = api.get_timeseries(item_id, timestep=TIMESERIES_STEP)
+            db.backfill_price_history(item_id, item_name, ts_data)
+
             history = db.get_price_history(item_id, limit=30)
             trend = analyzer.calculate_trend(history)
-            ts_data = api.get_timeseries(item_id, timestep=TIMESERIES_STEP)
             prediction = analyzer.get_prediction(trend, ts_data)
 
             return {
