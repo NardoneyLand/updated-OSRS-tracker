@@ -175,7 +175,7 @@ HELP_SECTIONS = [
      "    5.  Add items you want to follow to your Watchlist from the "
      "Search tab.\n\n"
      "The tabs, left to right: FlipRec · Alerts · Watchlist · Volatile · "
-     "Search · History · News · Help."),
+     "Search · News · Help."),
 
     ("FlipRec — flip recommendations",
      "FlipRec lists every item you could buy and immediately resell at a "
@@ -277,7 +277,7 @@ HELP_SECTIONS = [
      "cut noise from rarely traded items. Click a header to sort; "
      "double-click a row to open it in Search."),
 
-    ("Search — look up any item",
+    ("Search — look up any item and see its chart",
      "Start typing an item name and pick from the dropdown — 'Bandos' "
      "shows all Bandos gear, 'Bandos chest' narrows it down. Click a "
      "row, or press Enter for the top match; Escape closes the "
@@ -290,8 +290,13 @@ HELP_SECTIONS = [
      "    •  Signal — BUY, HOLD or SELL (see below).\n"
      "    •  Volume — trading now vs the recent average.\n"
      "    •  Momentum — whether the move is speeding up or slowing.\n\n"
-     "Buttons: ☆ Add to Watchlist and View history →. Every search also "
-     "saves the item's price history so its History chart is ready."),
+     "Click ☆ Add to Watchlist to follow the item on the Watchlist tab.\n\n"
+     "Below the result is the item's price chart (high, low and mid). "
+     "Choose a range: 1H, 12H, 1D, 1W, 1M, 1Y or All. The history comes "
+     "from the OSRS Wiki, so the chart is filled in even the first time "
+     "you search an item. Short ranges use 5-minute data, 1W hourly, 1M "
+     "6-hourly, and 1Y / All daily; All goes back about a year. Refresh "
+     "chart re-downloads it."),
 
     ("BUY / HOLD / SELL — what they mean",
      "The Search signal is a rule of thumb, not financial advice. It "
@@ -302,15 +307,6 @@ HELP_SECTIONS = [
      "Score ≥ 2 → BUY (high), 1 → BUY (moderate), 0 → HOLD, "
      "−1 → HOLD/SELL, ≤ −2 → SELL. Moves over ±25% trigger a "
      "manipulation guard that pulls the signal toward neutral."),
-
-    ("History — price charts",
-     "Charts the high, low and mid price of any item you've searched. "
-     "Pick it from the Item list (Refresh list adds newly searched "
-     "items), then choose a range: 1H, 12H, 1D, 1W, 1M, 1Y or All.\n\n"
-     "History comes from the OSRS Wiki, so you see past prices even for "
-     "an item you only just searched. Short ranges use 5-minute data, "
-     "1W hourly, 1M 6-hourly, and 1Y / All daily. All goes back about a "
-     "year. Refresh chart re-downloads the data."),
 
     ("News",
      "The latest official OSRS news loads automatically when the app "
@@ -486,7 +482,11 @@ class OSRSTrackerApp:
 
     def _configure_root(self):
         self.root.title("OSRS Price Tracker")
-        self.root.geometry("1100x720")
+        # Big enough for the Search panel + chart, but never off-screen.
+        w = min(1250, self.root.winfo_screenwidth() - 80)
+        h = min(860, self.root.winfo_screenheight() - 100)
+        self.root.geometry(f"{w}x{h}")
+        self.root.minsize(min(1000, w), min(640, h))
         self.root.configure(bg=COLOR_BG)
 
         style = ttk.Style()
@@ -498,7 +498,10 @@ class OSRSTrackerApp:
         # Frames
         style.configure("TFrame", background=COLOR_BG)
         style.configure("Panel.TFrame", background=COLOR_PANEL,
-                        borderwidth=1, relief="solid")
+                        borderwidth=1, relief="solid",
+                        bordercolor=COLOR_BORDER)
+        # Sections inside a panel: same background, no extra border.
+        style.configure("Inner.TFrame", background=COLOR_PANEL, borderwidth=0)
         style.configure("Sub.TFrame", background=COLOR_PANEL_HI)
 
         # Labels
@@ -644,7 +647,6 @@ class OSRSTrackerApp:
         self.volatile_tab = self._build_volatile_tab()
         self.fliprec_tab = self._build_fliprec_tab()
         self.news_tab = self._build_news_tab()
-        self.history_tab = self._build_history_tab()
         self.help_tab = self._build_help_tab()
 
         self.notebook.add(self.fliprec_tab, text="FlipRec")
@@ -652,7 +654,6 @@ class OSRSTrackerApp:
         self.notebook.add(self.watchlist_tab, text="Watchlist")
         self.notebook.add(self.volatile_tab, text="Volatile")
         self.notebook.add(self.search_tab, text="Search")
-        self.notebook.add(self.history_tab, text="History")
         self.notebook.add(self.news_tab, text="News")
         self.notebook.add(self.help_tab, text="Help")
 
@@ -728,16 +729,45 @@ class OSRSTrackerApp:
 
         # Result panel
         self.result_frame = ttk.Frame(frame, style="Panel.TFrame")
-        self.result_frame.pack(side="top", fill="both", expand=True,
-                               padx=20, pady=10)
+        self.result_frame.pack(side="top", fill="x", padx=20, pady=(10, 6))
 
         self.placeholder_label = ttk.Label(
             self.result_frame,
-            text=("\nStart typing to search "
-                  "— see live prices, trends, and a buy/hold/sell signal.\n"),
+            text=("\nStart typing to search — see live prices, a "
+                  "buy/hold/sell signal and the item's price chart.\n"),
             style="Panel.TLabel", justify="center",
         )
-        self.placeholder_label.pack(expand=True)
+        self.placeholder_label.pack(expand=True, pady=10)
+
+        # Price chart (formerly the History tab)
+        self.history_item = None          # (item_id, name) being charted
+        self.history_range = HISTORY_DEFAULT_RANGE
+        self.history_range_btns = {}
+        self._history_fetched = set()     # (item_id, step) pulled this session
+
+        range_bar = ttk.Frame(frame)
+        range_bar.pack(side="top", fill="x", padx=20, pady=(0, 6))
+        ttk.Label(range_bar, text="Chart range:", style="TLabel").pack(
+            side="left", padx=(0, 8))
+        for label, _secs, _step in HISTORY_RANGES:
+            btn = ttk.Button(range_bar, text=label, style="Range.TButton",
+                             command=lambda l=label: self._set_history_range(l))
+            btn.pack(side="left", padx=(0, 4))
+            self.history_range_btns[label] = btn
+        self._update_range_buttons()
+        ttk.Button(range_bar, text="Refresh chart",
+                   command=self._refresh_history_chart
+                   ).pack(side="left", padx=(12, 0))
+
+        chart_frame = ttk.Frame(frame, style="Panel.TFrame")
+        chart_frame.pack(side="top", fill="both", expand=True,
+                         padx=20, pady=(0, 20))
+        self.history_canvas = tk.Canvas(
+            chart_frame, bg=COLOR_PANEL, highlightthickness=0, height=240)
+        self.history_canvas.pack(fill="both", expand=True, padx=10, pady=10)
+        self.history_canvas.bind("<Configure>",
+                                 lambda _e: self._draw_history_chart())
+        self._history_placeholder("Search for an item to see its price chart.")
 
         return frame
 
@@ -826,6 +856,8 @@ class OSRSTrackerApp:
 
     def _lookup_item(self, item: dict):
         self._render_message(f"Fetching {item['name']}…")
+        self.history_item = (item["id"], item["name"])
+        self._draw_history_chart()
 
         item_id = item["id"]
         item_name = item["name"]
@@ -862,6 +894,9 @@ class OSRSTrackerApp:
                 self._render_message(f"No live price data for {item_name}.")
                 return
             self._render_result(**payload)
+            # The lookup just saved fresh history; redraw with it.
+            if self.history_item and self.history_item[0] == item_id:
+                self._draw_history_chart()
 
         run_async(self.root, fetch, done)
 
@@ -887,21 +922,20 @@ class OSRSTrackerApp:
         sc = signal_color(sugg)
 
         # Header
-        header = ttk.Frame(self.result_frame, style="Panel.TFrame")
-        header.pack(fill="x", padx=20, pady=(20, 10))
+        header = ttk.Frame(self.result_frame, style="Inner.TFrame")
+        header.pack(fill="x", padx=16, pady=(12, 6))
         ttk.Label(header, text=name, style="Item.TLabel").pack(side="left")
 
-        ttk.Button(header, text="View history →",
-                   command=lambda: self._open_history(item["id"], name)
-                   ).pack(side="right")
         self._search_item = item
         self.watch_btn = ttk.Button(header, command=self._toggle_watch)
-        self.watch_btn.pack(side="right", padx=(0, 8))
+        self.watch_btn.pack(side="right")
         self._update_watch_btn()
 
         # Stats grid
-        grid = ttk.Frame(self.result_frame, style="Panel.TFrame")
-        grid.pack(fill="x", padx=20, pady=10)
+        body = ttk.Frame(self.result_frame, style="Inner.TFrame")
+        body.pack(fill="x", padx=16, pady=(0, 12))
+        grid = ttk.Frame(body, style="Inner.TFrame")
+        grid.pack(side="left", anchor="n")
 
         rows = [
             ("High buy", f"{fmt_gp(high)} gp", COLOR_GREEN),
@@ -932,15 +966,16 @@ class OSRSTrackerApp:
 
         # Reasons
         if prediction["reasons"]:
-            reasons_frame = ttk.Frame(self.result_frame, style="Panel.TFrame")
-            reasons_frame.pack(fill="x", padx=20, pady=(8, 20))
+            reasons_frame = ttk.Frame(body, style="Inner.TFrame")
+            reasons_frame.pack(side="left", anchor="n", fill="x",
+                               expand=True, padx=(40, 0))
             ttk.Label(reasons_frame, text="Analysis:",
                       style="PanelHeader.TLabel"
                       ).pack(anchor="w")
             for r in prediction["reasons"]:
                 ttk.Label(reasons_frame, text=f"  •  {r}",
                           style="Panel.TLabel",
-                          wraplength=900, justify="left"
+                          wraplength=520, justify="left"
                           ).pack(anchor="w")
 
     # ── Alerts tab ────────────────────────────────────────────────────────────
@@ -1822,96 +1857,15 @@ class OSRSTrackerApp:
         if url:
             webbrowser.open(url)
 
-    # ── History tab ───────────────────────────────────────────────────────────
-
-    def _build_history_tab(self) -> ttk.Frame:
-        frame = ttk.Frame(self.notebook)
-
-        bar = ttk.Frame(frame)
-        bar.pack(fill="x", padx=20, pady=(20, 10))
-        ttk.Label(bar, text="Item:", style="TLabel").pack(side="left",
-                                                          padx=(0, 8))
-
-        self.history_item_var = tk.StringVar()
-        self.history_combo = ttk.Combobox(
-            bar, textvariable=self.history_item_var,
-            state="readonly", width=40,
-        )
-        self.history_combo.pack(side="left", padx=(0, 8))
-        self.history_combo.bind("<<ComboboxSelected>>",
-                                 lambda _e: self._draw_history_chart())
-
-        ttk.Button(bar, text="Refresh list",
-                   command=self._reload_history_items
-                   ).pack(side="left", padx=(0, 8))
-        ttk.Button(bar, text="Refresh chart",
-                   command=self._refresh_history_chart).pack(side="left")
-
-        # Time-range selector
-        self.history_range = HISTORY_DEFAULT_RANGE
-        self.history_range_btns = {}
-        self._history_fetched = set()   # (item_id, step) pulled this session
-        range_bar = ttk.Frame(frame)
-        range_bar.pack(fill="x", padx=20, pady=(0, 10))
-        ttk.Label(range_bar, text="Range:", style="TLabel").pack(
-            side="left", padx=(0, 8))
-        for label, _secs, _step in HISTORY_RANGES:
-            btn = ttk.Button(range_bar, text=label, style="Range.TButton",
-                             command=lambda l=label: self._set_history_range(l))
-            btn.pack(side="left", padx=(0, 4))
-            self.history_range_btns[label] = btn
-        self._update_range_buttons()
-
-        chart_frame = ttk.Frame(frame, style="Panel.TFrame")
-        chart_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-
-        self.history_canvas = tk.Canvas(
-            chart_frame, bg=COLOR_PANEL, highlightthickness=0,
-        )
-        self.history_canvas.pack(fill="both", expand=True, padx=10, pady=10)
-        self.history_canvas.bind("<Configure>",
-                                  lambda _e: self._draw_history_chart())
-
-        self.history_id_map = {}
-        self._history_placeholder("Select an item to see its price history.")
-        return frame
+    # ── Price chart (Search tab) ──────────────────────────────────────────────
 
     def _history_placeholder(self, text: str):
         c = self.history_canvas
         c.delete("all")
         w = c.winfo_width() or 800
-        h = c.winfo_height() or 400
+        h = c.winfo_height() or 240
         c.create_text(w / 2, h / 2, text=text,
                       fill=COLOR_DIM, font=FONT_BODY)
-
-    def _reload_history_items(self):
-        conn = db.get_connection()
-        rows = conn.execute(
-            "SELECT DISTINCT item_id, item_name "
-            "FROM price_history "
-            "ORDER BY item_name COLLATE NOCASE"
-        ).fetchall()
-        conn.close()
-
-        self.history_id_map = {row[1]: row[0] for row in rows}
-        names = list(self.history_id_map.keys())
-        self.history_combo["values"] = names
-        if names:
-            if self.history_item_var.get() not in names:
-                self.history_combo.current(0)
-            self._draw_history_chart()
-        else:
-            self.history_item_var.set("")
-            self._history_placeholder(
-                "No price history yet. Search for an item first."
-            )
-
-    def _open_history(self, item_id: int, item_name: str):
-        self._reload_history_items()
-        if item_name in self.history_id_map:
-            self.history_item_var.set(item_name)
-            self._draw_history_chart()
-        self.notebook.select(self.history_tab)
 
     def _update_range_buttons(self):
         for label, btn in self.history_range_btns.items():
@@ -1925,8 +1879,7 @@ class OSRSTrackerApp:
 
     def _refresh_history_chart(self):
         """Re-pull API data for the selected item, then redraw."""
-        name = self.history_item_var.get()
-        item_id = self.history_id_map.get(name)
+        item_id = self.history_item[0] if self.history_item else None
         self._history_fetched = {k for k in self._history_fetched
                                  if k[0] != item_id}
         self._draw_history_chart()
@@ -1945,16 +1898,15 @@ class OSRSTrackerApp:
         def done(added, err):
             if err or not added:
                 return
-            if self.history_id_map.get(self.history_item_var.get()) == item_id:
+            if self.history_item and self.history_item[0] == item_id:
                 self._draw_history_chart()
 
         run_async(self.root, fetch, done)
 
     def _draw_history_chart(self):
-        name = self.history_item_var.get()
-        if not name or name not in self.history_id_map:
+        if not self.history_item:
             return
-        item_id = self.history_id_map[name]
+        item_id, name = self.history_item
 
         range_label, window, step = next(
             r for r in HISTORY_RANGES if r[0] == self.history_range)
@@ -2139,8 +2091,7 @@ class OSRSTrackerApp:
                 self._refresh_fliprec()
         elif tab is self.news_tab:
             self._reload_news_cache()
-        elif tab is self.history_tab:
-            self._reload_history_items()
+
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

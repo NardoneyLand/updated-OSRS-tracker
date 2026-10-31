@@ -4,7 +4,7 @@ A desktop app for finding profitable Old School RuneScape Grand Exchange
 flips (after the GE tax), alerting you to big opportunities, and tracking
 prices and news. Tkinter GUI, distributed as a macOS `.app` bundle and a Windows `.exe`.
 
-Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** · **History** · **News** · **Help**
+Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** · **News** · **Help**
 
 ---
 
@@ -14,8 +14,7 @@ Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** �
 - **Profit alerts** — checks the market every 5 minutes and alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and taskbar flash.
 - **Watchlist** — add items from Search and follow their live margins.
 - **Volatile scanner** — the biggest movers across the whole GE over 5m / 1h / 6h / 24h.
-- **Item search** — autocomplete lookup with a Buy / Hold / Sell signal from price, volume and momentum.
-- **Price history charts** — 1H to 1 year, backed by the OSRS Wiki's history.
+- **Item search + price chart** — autocomplete lookup with a Buy / Hold / Sell signal from price, volume and momentum, plus the item's price chart (1H to 1 year, backed by the OSRS Wiki's history) on the same page.
 - **Live news** — the official OSRS news feed, loaded on launch.
 - **In-app Help tab** — explains every tab, the verdicts and the GE tax.
 
