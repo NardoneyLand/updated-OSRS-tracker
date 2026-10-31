@@ -53,3 +53,19 @@ Name: "{autodesktop}\OSRS Tracker"; Filename: "{app}\OSRS Tracker.exe"; Tasks: d
 ; Not skipped in /SILENT mode, so "Check for updates" reopens the app after
 ; updating. (Interactive installs still show this as a checkbox.)
 Filename: "{app}\OSRS Tracker.exe"; Description: "Launch OSRS Tracker"; Flags: nowait postinstall
+
+[Code]
+// The app is a PyInstaller one-file exe. When "Check for updates" starts
+// this installer, the installer inherits the old app's PyInstaller
+// variables and would pass them on to the new version launched above,
+// which then fails with "Failed to load Python DLL" (they point at the old
+// app's deleted unpack folder). This makes the new version start fresh.
+// The app also clears them itself from 1.0.2; this covers older versions.
+function SetEnvironmentVariable(lpName, lpValue: String): Boolean;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+
+function InitializeSetup(): Boolean;
+begin
+  SetEnvironmentVariable('PYINSTALLER_RESET_ENVIRONMENT', '1');
+  Result := True;
+end;

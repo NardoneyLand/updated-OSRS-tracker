@@ -112,6 +112,27 @@ def download(asset: dict,
     return dest
 
 
+def _clean_env() -> dict:
+    """
+    Environment for the installer, without this app's PyInstaller state.
+
+    The installer passes its environment on to the new version it starts.
+    If that still pointed at this app's unpack folder (deleted when this
+    app exits), the new version fails with "Failed to load Python DLL".
+    PYINSTALLER_RESET_ENVIRONMENT tells it to start fresh.
+    """
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("_PYI_") and k != "_MEIPASS2"}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        # Tcl/Tk paths set at startup point inside the unpack folder too.
+        for k in ("TCL_LIBRARY", "TK_LIBRARY"):
+            if env.get(k, "").startswith(meipass):
+                del env[k]
+    return env
+
+
 def launch_installer(path: str) -> None:
     """
     Windows: run the installer silently; it closes this app if needed,
@@ -120,8 +141,9 @@ def launch_installer(path: str) -> None:
     """
     if sys.platform == "win32":
         subprocess.Popen([path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
-                          "/CLOSEAPPLICATIONS"], close_fds=True)
+                          "/CLOSEAPPLICATIONS"], close_fds=True,
+                         env=_clean_env())
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", path])
+        subprocess.Popen(["open", path], env=_clean_env())
     else:
         raise UpdateError("Automatic install isn't supported on this system.")
