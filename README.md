@@ -154,6 +154,7 @@ requirements.txt    Python deps
 
 ## Updates and troubleshooting
 
+- **What's new:** see the [changelog](CHANGELOG.md).
 - **Help → Check for updates** looks for a newer GitHub release. On Windows it downloads the installer and updates the app in place; on macOS it opens the new `.dmg`.
 - **Help → Open data folder** opens your settings, watchlist, alerts, price history and `osrs_tracker.log`. If something goes wrong, attach that log to a GitHub issue.
 
