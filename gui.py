@@ -52,6 +52,7 @@ HISTORY_RANGES = [
     ("All",  None,        "24h"),
 ]
 HISTORY_DEFAULT_RANGE = "1W"
+PRICE_FORMATS = ["Short (1.2K)", "Exact (1,240)"]
 STEP_SECONDS = {"5m": 300, "1h": 3600, "6h": 6 * 3600, "24h": 86400}
 CHART_MIN_POINTS = 4              # zooming stops at about this many points
 FLIP_MAX_ROWS = 300
@@ -198,8 +199,8 @@ HELP_SECTIONS = [
      "    •  Items — All items, Members only or F2P only.\n"
      "    •  Hide inactive — hides items whose margin isn't real (see "
      "Inactive below).\n"
-     "    •  Prices — Short (1.2K) or Exact (1,240). Also used by Alerts "
-     "and Watchlist.\n"
+     "    •  Prices — Short (1.2K) or Exact (1,240). The same setting is "
+     "on the Alerts tab, and Watchlist follows it too.\n"
      "    •  Show — only one verdict, e.g. just Profitable.\n"
      "    •  Refresh — fetch fresh prices. The tab loads automatically "
      "the first time you open it.\n\n"
@@ -263,7 +264,9 @@ HELP_SECTIONS = [
      "flash the taskbar on Windows.\n"
      "    •  Dismiss selected clears an item; Dismiss all clears "
      "everything. Alerts are kept for 7 days.\n"
-     "    •  Check now runs a check immediately.\n\n"
+     "    •  Check now runs a check immediately.\n"
+     "    •  Prices — Short (1.2K) or Exact (1,240); the same setting as "
+     "on FlipRec.\n\n"
      "Nothing is checked while the app is closed. Without a Capital set "
      "on FlipRec, quantities are limited only by buy limits and volume, "
      "so you'll see more (and larger) alerts."),
@@ -674,6 +677,11 @@ class OSRSTrackerApp:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=20, pady=(8, 20))
 
+        # Price format (Short 1.2K / Exact 1,240): one setting, with a
+        # dropdown on FlipRec and Alerts, also used by Watchlist.
+        self.flip_format_var = tk.StringVar(
+            value=settings.load().get("flip_price_format", PRICE_FORMATS[0]))
+
         self.search_tab = self._build_search_tab()
         self.alerts_tab = self._build_alerts_tab()
         self.watchlist_tab = self._build_watchlist_tab()
@@ -1077,6 +1085,7 @@ class OSRSTrackerApp:
             "write", lambda *_: self._schedule_threshold_change())
         ttk.Label(bar, text="gp", style="TLabel").pack(side="left",
                                                        padx=(0, 16))
+        self._price_format_picker(bar)
 
         self.alerts_check_btn = ttk.Button(
             bar, text="Check now",
@@ -1088,9 +1097,10 @@ class OSRSTrackerApp:
         ttk.Button(bar, text="Dismiss all",
                    command=self._dismiss_all_alerts).pack(side="left")
 
+        # Own line, so the status isn't pushed off the edge of the bar.
         self.alerts_status = tk.StringVar(value="Waiting for first check…")
-        ttk.Label(bar, textvariable=self.alerts_status, style="Dim.TLabel"
-                  ).pack(side="left", padx=12)
+        ttk.Label(frame, textvariable=self.alerts_status, style="Dim.TLabel"
+                  ).pack(anchor="w", padx=20, pady=(0, 6))
 
         cols = tuple(c[0] for c in self.ALERT_COLUMNS)
         tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
@@ -1356,9 +1366,28 @@ class OSRSTrackerApp:
     # ── Shared helpers ────────────────────────────────────────────────────────
 
     def _price_fmt(self):
-        """Price formatter chosen in FlipRec (Short 1.2K / Exact 1,240)."""
+        """Price formatter chosen in the Prices dropdown."""
         return (fmt_gp_exact if self.flip_format_var.get().startswith("Exact")
                 else fmt_gp)
+
+    def _price_format_picker(self, bar):
+        """'Prices:' dropdown. FlipRec and Alerts share one setting, so
+        changing either updates both."""
+        ttk.Label(bar, text="Prices:", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        combo = ttk.Combobox(bar, textvariable=self.flip_format_var,
+                             state="readonly", width=14, values=PRICE_FORMATS)
+        combo.pack(side="left", padx=(0, 16))
+        combo.bind("<<ComboboxSelected>>",
+                   lambda _e: self._on_price_format_changed())
+
+    def _on_price_format_changed(self):
+        settings.save({"flip_price_format": self.flip_format_var.get()})
+        # Only the display changes, so redraw without re-sorting.
+        if self.flip_results:
+            self._render_fliprec_table()
+        self._render_alerts()
+        self._render_watchlist()
 
     def _open_selected_in_search(self, tree, id_map):
         sel = tree.selection()
@@ -1603,16 +1632,7 @@ class OSRSTrackerApp:
                         command=self._apply_flip_filters
                         ).pack(side="left", padx=(0, 16))
 
-        ttk.Label(bar, text="Prices:", style="TLabel"
-                  ).pack(side="left", padx=(0, 6))
-        self.flip_format_var = tk.StringVar(
-            value=prefs.get("flip_price_format", "Short (1.2K)"))
-        fmt_combo = ttk.Combobox(
-            bar, textvariable=self.flip_format_var, state="readonly",
-            width=14, values=["Short (1.2K)", "Exact (1,240)"])
-        fmt_combo.pack(side="left", padx=(0, 16))
-        fmt_combo.bind("<<ComboboxSelected>>",
-                       lambda _e: self._apply_flip_filters())
+        self._price_format_picker(bar)
 
         ttk.Label(bar, text="Show:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
@@ -1797,8 +1817,7 @@ class OSRSTrackerApp:
                 *[""] * (len(self.FLIP_COLUMNS) - 1)))
             return
 
-        fmt = (fmt_gp_exact if self.flip_format_var.get().startswith("Exact")
-               else fmt_gp)
+        fmt = self._price_fmt()
         for r in rows:
             tag = {"Profitable": "good", "Marginal": "warn", "Suspect": "warn"}.get(
                 r["verdict"], "dim")
