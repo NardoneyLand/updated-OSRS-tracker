@@ -10,7 +10,9 @@
 # Requires Python 3.10+ with Tkinter. The standard installer from
 # python.org bundles Tk — make sure "tcl/tk and IDLE" stays checked.
 
-$ErrorActionPreference = 'Stop'
+# Native tools (pip, PyInstaller) log progress to stderr, which 'Stop' would treat
+# as fatal on PowerShell 5.1; exit codes are checked explicitly instead.
+$ErrorActionPreference = 'Continue'
 Set-Location -Path $PSScriptRoot
 
 $venv = '.venv'

@@ -23,8 +23,8 @@ Tabs: **Search** · **Alerts** · **Volatile** · **News** · **History** · **H
 
 Grab the latest release from the [Releases page](https://github.com/NardoneyLand/updated-OSRS-tracker/releases):
 
-- **macOS** — pick the `.dmg` or `.zip`, drag `OSRS Tracker.app` to `/Applications`. First launch, macOS may flag the unsigned build: right-click the app → **Open** → **Open** to allow it once.
-- **Windows** — download `OSRS Tracker.exe` and double-click. SmartScreen may warn about an unrecognized publisher: click "More info" → "Run anyway" to allow it once.
+- **macOS** — pick the `.dmg`, drag `OSRS Tracker.app` to `/Applications`. First launch, macOS may flag the unsigned build: right-click the app → **Open** → **Open** to allow it once.
+- **Windows** — download `OSRS-Tracker-Setup-<version>.exe` and run it (installs per-user, adds a Start Menu entry and uninstaller). SmartScreen may warn about an unrecognized publisher: click "More info" → "Run anyway" to allow it once.
 
 App data lives in:
 - macOS: `~/Library/Application Support/OSRS Tracker/`
@@ -107,16 +107,16 @@ Then per release:
 
 This builds the `.app`, packages it as both a `.zip` and a `.dmg`, and publishes to GitHub Releases under the given tag.
 
-### Windows
+### Automated (Windows installer + macOS .dmg)
 
-There's no automated `release.ps1` yet. Manual flow:
+Push a version tag; GitHub Actions ([release.yml](.github/workflows/release.yml)) builds both and attaches them to a Release:
 
-```powershell
-.\build.ps1
-gh release upload v1.0.0 ".\dist\OSRS Tracker.exe"
+```bash
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
-(Or use `gh release create v1.0.0 ".\dist\OSRS Tracker.exe"` if you're publishing the tag from Windows for the first time.)
+The Windows installer is built from `installer.iss` with Inno Setup; the macOS `.dmg` is Apple Silicon only.
 
 ---
 

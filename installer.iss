@@ -1,0 +1,48 @@
+; installer.iss — Inno Setup script for the Windows installer.
+;
+; Build (after .\build.ps1):
+;     iscc /DAppVersion=1.0.0 installer.iss
+; Output: dist\OSRS-Tracker-Setup-<version>.exe
+;
+; Installs per-user (no admin prompt) with a Start Menu entry, optional desktop
+; shortcut, and an uninstaller. App data in %APPDATA%\OSRS Tracker is kept on
+; uninstall.
+
+#ifndef AppVersion
+  #define AppVersion "0.0.0"
+#endif
+
+[Setup]
+AppId={{6C1F0E64-5B1B-4C55-9B7E-0A5A1D3E7F21}
+AppName=OSRS Tracker
+AppVersion={#AppVersion}
+AppPublisher=NardoneyLand
+AppPublisherURL=https://github.com/NardoneyLand/updated-OSRS-tracker
+DefaultDirName={autopf}\OSRS Tracker
+DefaultGroupName=OSRS Tracker
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+OutputDir=dist
+OutputBaseFilename=OSRS-Tracker-Setup-{#AppVersion}
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesInstallIn64BitMode=x64compatible
+UninstallDisplayIcon={app}\OSRS Tracker.exe
+#ifexist "icon.ico"
+SetupIconFile=icon.ico
+#endif
+
+[Tasks]
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; Flags: unchecked
+
+[Files]
+Source: "dist\OSRS Tracker.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+Name: "{group}\OSRS Tracker"; Filename: "{app}\OSRS Tracker.exe"
+Name: "{group}\Uninstall OSRS Tracker"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\OSRS Tracker"; Filename: "{app}\OSRS Tracker.exe"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\OSRS Tracker.exe"; Description: "Launch OSRS Tracker"; Flags: nowait postinstall skipifsilent

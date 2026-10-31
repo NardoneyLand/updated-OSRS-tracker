@@ -15,7 +15,9 @@ param(
     [switch]$NoClean
 )
 
-$ErrorActionPreference = 'Stop'
+# Native tools (pip, PyInstaller) log progress to stderr, which 'Stop' would treat
+# as fatal on PowerShell 5.1; exit codes are checked explicitly instead.
+$ErrorActionPreference = 'Continue'
 Set-Location -Path $PSScriptRoot
 
 $venv = '.venv'
