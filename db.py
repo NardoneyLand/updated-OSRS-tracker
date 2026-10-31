@@ -1,5 +1,5 @@
 """
-db.py — SQLite database for price history, alerts, and news cache.
+db.py — SQLite database for price history, profit alerts, watchlist, and news cache.
 """
 
 import sqlite3
@@ -32,15 +32,27 @@ def initialize_db():
             timestamp   INTEGER NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS alerts (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            item_id      INTEGER NOT NULL,
-            item_name    TEXT    NOT NULL,
-            alert_type   TEXT    NOT NULL,
-            old_price    INTEGER,
-            new_price    INTEGER,
-            pct_change   REAL,
-            timestamp    INTEGER NOT NULL
+        CREATE TABLE IF NOT EXISTS profit_alerts (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id    INTEGER NOT NULL,
+            item_name  TEXT    NOT NULL,
+            buy        INTEGER,
+            sell       INTEGER,
+            net        INTEGER,
+            qty        INTEGER,
+            profit     INTEGER,
+            roi        REAL,
+            timestamp  INTEGER NOT NULL,
+            dismissed  INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_alert_item
+            ON profit_alerts (item_id, timestamp);
+
+        CREATE TABLE IF NOT EXISTS watchlist (
+            item_id    INTEGER PRIMARY KEY,
+            item_name  TEXT    NOT NULL,
+            added_ts   INTEGER NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS news_cache (
@@ -61,6 +73,10 @@ def initialize_db():
     cols = [r[1] for r in c.execute("PRAGMA table_info(price_history)")]
     if "source_step" not in cols:
         c.execute("ALTER TABLE price_history ADD COLUMN source_step TEXT")
+
+    # Migration: the old "moved 10% since your last search" alerts were
+    # replaced by profit alerts (profit_alerts).
+    c.execute("DROP TABLE IF EXISTS alerts")
 
     conn.commit()
     conn.close()
@@ -145,40 +161,104 @@ def get_price_range(item_id: int, since_ts: int, step: str,
     return [tuple(r) for r in rows]
 
 
-def get_last_recorded_price(item_id: int) -> Optional[Tuple]:
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT high_price, low_price, timestamp "
-        "FROM price_history WHERE item_id = ? "
-        "ORDER BY timestamp DESC LIMIT 1",
-        (item_id,)
-    ).fetchone()
-    conn.close()
-    return tuple(row) if row else None
+# ── Profit alerts ─────────────────────────────────────────────────────────────
+
+ALERT_RETENTION = 7 * 86400   # keep alerts for 7 days
 
 
-# ── Alerts ────────────────────────────────────────────────────────────────────
-
-def record_alert(item_id: int, item_name: str, alert_type: str,
-                 old_price: int, new_price: int, pct_change: float):
+def record_profit_alert(row: dict, ts: Optional[int] = None):
+    """Store one alert from an analyzer.find_flips() result row."""
     conn = get_connection()
     conn.execute(
-        "INSERT INTO alerts "
-        "(item_id, item_name, alert_type, old_price, new_price, pct_change, timestamp) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (item_id, item_name, alert_type, old_price, new_price, pct_change, int(time.time()))
+        "INSERT INTO profit_alerts "
+        "(item_id, item_name, buy, sell, net, qty, profit, roi, timestamp) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (row["item_id"], row["name"], row["buy"], row["sell"], row["net"],
+         row["qty"], row["profit"], row["roi"], int(ts or time.time()))
     )
     conn.commit()
     conn.close()
 
 
-def get_recent_alerts(limit: int = 10) -> List[Tuple]:
+def last_alert_time(item_id: int) -> Optional[int]:
+    """Most recent alert for an item, dismissed or not (for the cooldown)."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT MAX(timestamp) FROM profit_alerts WHERE item_id = ?",
+        (item_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+def get_active_alerts() -> List[dict]:
+    """Latest undismissed alert per item (newest first), with a hit count."""
     conn = get_connection()
     rows = conn.execute(
-        "SELECT item_name, alert_type, old_price, new_price, pct_change, timestamp "
-        "FROM alerts ORDER BY timestamp DESC LIMIT ?",
-        (limit,)
+        "SELECT a.item_id, a.item_name, a.buy, a.sell, a.net, a.qty, "
+        "       a.profit, a.roi, a.timestamp, c.n "
+        "FROM profit_alerts a "
+        "JOIN (SELECT item_id, MAX(id) AS mid, COUNT(*) AS n "
+        "      FROM profit_alerts WHERE dismissed = 0 GROUP BY item_id) c "
+        "  ON a.id = c.mid "
+        "ORDER BY a.timestamp DESC"
     ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def dismiss_alerts(item_id: Optional[int] = None):
+    """Dismiss one item's alerts, or all alerts if item_id is None."""
+    conn = get_connection()
+    if item_id is None:
+        conn.execute("UPDATE profit_alerts SET dismissed = 1")
+    else:
+        conn.execute("UPDATE profit_alerts SET dismissed = 1 WHERE item_id = ?",
+                     (item_id,))
+    conn.commit()
+    conn.close()
+
+
+def purge_old_alerts(max_age: int = ALERT_RETENTION):
+    conn = get_connection()
+    conn.execute("DELETE FROM profit_alerts WHERE timestamp < ?",
+                 (int(time.time()) - max_age,))
+    conn.commit()
+    conn.close()
+
+
+# ── Watchlist ─────────────────────────────────────────────────────────────────
+
+def watchlist_add(item_id: int, item_name: str):
+    conn = get_connection()
+    conn.execute(
+        "INSERT OR IGNORE INTO watchlist (item_id, item_name, added_ts) "
+        "VALUES (?, ?, ?)", (item_id, item_name, int(time.time())))
+    conn.commit()
+    conn.close()
+
+
+def watchlist_remove(item_id: int):
+    conn = get_connection()
+    conn.execute("DELETE FROM watchlist WHERE item_id = ?", (item_id,))
+    conn.commit()
+    conn.close()
+
+
+def watchlist_contains(item_id: int) -> bool:
+    conn = get_connection()
+    row = conn.execute("SELECT 1 FROM watchlist WHERE item_id = ?",
+                       (item_id,)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def watchlist_items() -> List[Tuple]:
+    """(item_id, item_name, added_ts), oldest first."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT item_id, item_name, added_ts FROM watchlist "
+        "ORDER BY added_ts").fetchall()
     conn.close()
     return [tuple(r) for r in rows]
 

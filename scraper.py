@@ -23,9 +23,9 @@ from typing import Dict, List
 import requests
 from bs4 import BeautifulSoup
 
-from version import USER_AGENT
+import useragent
 
-SCRAPE_HEADERS = {"User-Agent": USER_AGENT}  # defined in version.py
+SCRAPE_HEADERS = useragent.HEADERS  # shared; per-install contact
 
 SOURCES: List[Dict] = [
     {
@@ -50,6 +50,7 @@ def _make_absolute(url: str, base_url: str) -> str:
 
 
 def scrape_source(source: Dict, max_articles: int = 5) -> List[Dict]:
+    useragent.require()
     results = []
     try:
         r = requests.get(source["url"], headers=SCRAPE_HEADERS, timeout=15)

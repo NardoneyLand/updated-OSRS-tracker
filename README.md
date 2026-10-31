@@ -1,21 +1,23 @@
 # OSRS Price Tracker
 
-A desktop app for tracking Old School RuneScape Grand Exchange prices,
-spotting volatile movers, and following live game news. Tkinter GUI,
-distributed as a macOS `.app` bundle and a Windows `.exe`.
+A desktop app for finding profitable Old School RuneScape Grand Exchange
+flips (after the GE tax), alerting you to big opportunities, and tracking
+prices and news. Tkinter GUI, distributed as a macOS `.app` bundle and a Windows `.exe`.
 
-Tabs: **Search** · **Alerts** · **Volatile** · **News** · **History** · **Help**
+Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** · **History** · **News** · **Help**
 
 ---
 
 ## Features
 
-- **Live price lookup** — autocomplete dropdown filters as you type. Search "Bandos" to see all Bandos items, narrow with "Bandos chest" to drill down.
-- **Buy / Hold / Sell signal** — heuristic score from price direction, volume, and momentum.
-- **Volatile scanner** — proactive sweep of every item on the GE for big movers, with sortable columns and a tunable time window (5m / 1h / 6h / 24h).
-- **Alert log** — every ≥10% mid-price swing on items you've looked up gets recorded.
-- **Live news** — pulls the official OSRS news RSS feed; double-click to open in your browser.
-- **Price history charts** — every snapshot you take is plotted on a native Tk canvas.
+- **FlipRec** — every item you can buy and resell at a profit after the 2% GE tax, priced like an in-game margin check. Capital-aware quantity and profit estimates, buy limits, volume, last-trade age, Profitable / Marginal / Suspect / Inactive verdicts, and a dip/spike signal.
+- **Profit alerts** — checks the market every 5 minutes and alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and taskbar flash.
+- **Watchlist** — add items from Search and follow their live margins.
+- **Volatile scanner** — the biggest movers across the whole GE over 5m / 1h / 6h / 24h.
+- **Item search** — autocomplete lookup with a Buy / Hold / Sell signal from price, volume and momentum.
+- **Price history charts** — 1H to 1 year, backed by the OSRS Wiki's history.
+- **Live news** — the official OSRS news feed, loaded on launch.
+- **In-app Help tab** — explains every tab, the verdicts and the GE tax.
 
 ---
 
@@ -146,7 +148,7 @@ requirements.txt    Python deps
 
 ## API & news source
 
-- Prices: [OSRS Wiki Prices API](https://prices.runescape.wiki/) — public, no key, ~60s upstream refresh. The Wiki asks apps to send a descriptive User-Agent with a contact; `USER_AGENT` in `version.py` (used by both the price API and the news scraper) points to this repo's Issues page. If you fork it, change `REPO_URL` there to your own repo.
+- Prices: [OSRS Wiki Prices API](https://prices.runescape.wiki/) — public, no key, ~60s upstream refresh. The Wiki asks apps to send a descriptive User-Agent with a contact. On first launch the app asks each user for their own contact (Discord name, email, …) and sends `OSRS-Price-Tracker/<version> (contact: …)`; it can be changed later from the Help tab. See `useragent.py`.
 - News: official OSRS RSS at `secure.runescape.com/m=news/latest_news.rss?oldschool=1`.
 
 ---

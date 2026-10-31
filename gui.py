@@ -8,6 +8,8 @@ Build a Mac .app bundle:
     ./build.sh
 """
 
+import ctypes
+import sys
 import threading
 import time
 import tkinter as tk
@@ -20,10 +22,15 @@ import db
 import scraper
 import search as search_module
 import settings
+import useragent
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-ALERT_THRESHOLD = 0.10
+# Profit alerts: checked in the background while the app is open.
+ALERT_CHECK_MS = 5 * 60 * 1000          # every 5 minutes
+ALERT_COOLDOWN = 3600                   # re-alert an item after 1 hour
+ALERT_DEFAULT_THRESHOLD = 1_000_000     # est. profit, adjustable in 100K steps
+ALERT_THRESHOLD_STEPS = [f"{v:,}" for v in range(100_000, 100_000_001, 100_000)]
 TIMESERIES_STEP = "1h"
 
 # History tab time ranges: (label, window in seconds or None for all time,
@@ -73,11 +80,12 @@ def fmt_gp(gp) -> str:
         gp = int(gp)
     except (TypeError, ValueError):
         return "N/A"
+    sign, gp = ("-" if gp < 0 else ""), abs(gp)
     if gp >= 1_000_000:
-        return f"{gp / 1_000_000:.2f}M"
+        return f"{sign}{gp / 1_000_000:.2f}M"
     if gp >= 1_000:
-        return f"{gp / 1_000:.1f}K"
-    return f"{gp:,}"
+        return f"{sign}{gp / 1_000:.1f}K"
+    return f"{sign}{gp:,}"
 
 
 def fmt_gp_exact(gp) -> str:
@@ -117,6 +125,26 @@ def signal_color(sugg: str) -> str:
     return COLOR_YELLOW
 
 
+# ── Taskbar flash ─────────────────────────────────────────────────────────────
+
+def flash_window(root: tk.Tk):
+    """Flash the taskbar button until the window is focused (Windows only)."""
+    if sys.platform != "win32":
+        return
+    try:
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("hwnd", ctypes.c_void_p),
+                        ("dwFlags", ctypes.c_uint), ("uCount", ctypes.c_uint),
+                        ("dwTimeout", ctypes.c_uint)]
+        FLASHW_ALL, FLASHW_TIMERNOFG = 0x3, 0xC
+        hwnd = int(root.wm_frame(), 16)
+        info = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd,
+                          FLASHW_ALL | FLASHW_TIMERNOFG, 0, 0)
+        ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))
+    except Exception:
+        pass  # cosmetic only
+
+
 # ── Threading helper ──────────────────────────────────────────────────────────
 
 def run_async(root: tk.Tk, target, on_done):
@@ -133,72 +161,191 @@ def run_async(root: tk.Tk, target, on_done):
 # ── Help text ─────────────────────────────────────────────────────────────────
 
 HELP_SECTIONS = [
-    ("Welcome",
-     "OSRS Price Tracker pulls live prices from the Old School RuneScape "
-     "Wiki Prices API and helps you spot trades worth making. Every search "
-     "fetches fresh data — there is no client-side cache on prices."),
+    ("Getting started",
+     "OSRS Price Tracker uses live Grand Exchange data from the OSRS Wiki to "
+     "find items worth flipping, alert you to big opportunities, and track "
+     "items you care about.\n\n"
+     "    1.  On first launch, enter a contact (see \"Your contact\" below).\n"
+     "    2.  Open FlipRec and type your available gp into Capital "
+     "(e.g. 10m, 500k, 1.5b). Profit estimates and alerts use it.\n"
+     "    3.  Look for green Profitable rows. Click Refresh right before "
+     "you place offers, because margins move quickly.\n"
+     "    4.  On Alerts, choose the profit that's worth your time "
+     "(1M by default). The app checks for you every 5 minutes.\n"
+     "    5.  Add items you want to follow to your Watchlist from the "
+     "Search tab.\n\n"
+     "The tabs, left to right: FlipRec · Alerts · Watchlist · Volatile · "
+     "Search · History · News · Help."),
 
-    ("Searching for items",
-     "Start typing in the search box. A dropdown appears showing every "
-     "matching item. Keep typing to narrow it down — 'Bandos' shows all "
-     "Bandos gear, 'Bandos chest' narrows to just the chestplate.\n\n"
-     "    •  Click a row to select an item.\n"
-     "    •  Press Enter to accept the top match.\n"
-     "    •  Press Escape to clear the dropdown."),
+    ("FlipRec — flip recommendations",
+     "FlipRec lists every item you could buy and immediately resell at a "
+     "profit after the GE tax, best first.\n\n"
+     "How a flip is priced: you buy at the latest instant-sell price "
+     "(Buy) and sell at the latest instant-buy price (Sell), the same "
+     "numbers an in-game margin check gives you.\n\n"
+     "Controls:\n"
+     "    •  Capital — the gp you have available. Leave blank to ignore it.\n"
+     "    •  Items — All items, Members only or F2P only.\n"
+     "    •  Hide inactive — hides items whose margin isn't real (see "
+     "Inactive below).\n"
+     "    •  Prices — Short (1.2K) or Exact (1,240). Also used by Alerts "
+     "and Watchlist.\n"
+     "    •  Show — only one verdict, e.g. just Profitable.\n"
+     "    •  Refresh — fetch fresh prices. The tab loads automatically "
+     "the first time you open it.\n\n"
+     "Columns:\n"
+     "    •  GE tax — tax on one sale (see \"The GE tax\").\n"
+     "    •  Net / item — Sell − tax − Buy.\n"
+     "    •  ROI — Net / item as a % of the Buy price.\n"
+     "    •  4h limit — the GE buy limit per 4 hours (\"?\" if unknown).\n"
+     "    •  Qty — how many you can realistically flip: the smallest of "
+     "what your capital buys, the 4h limit, and about 4 hours of market "
+     "volume.\n"
+     "    •  Est. profit — Net / item × Qty.\n"
+     "    •  Vol/hr — units traded in the last hour on the slower side.\n"
+     "    •  Last trade — how long ago the older side last traded. "
+     "⏱ means over 15 minutes, so the margin may have moved.\n"
+     "    •  Signal — the current price vs its 1-hour average: "
+     "\"Dip - may rebound\" (3%+ below), \"Spike - may fall\" (3%+ "
+     "above) or \"Extreme move - caution\" (25%+ away).\n\n"
+     "Click a column header to sort; click again to reverse. Double-click "
+     "a row to open the item in Search."),
 
-    ("Price panel",
-     "Once an item is selected you'll see:\n\n"
-     "    •  High buy / Low sell — the current Grand Exchange offers.\n"
-     "    •  Spread — how much margin exists between buy and sell.\n"
-     "    •  Trend — direction over the last few snapshots stored locally.\n"
-     "    •  Signal — BUY, HOLD, or SELL based on price + volume + momentum.\n"
-     "    •  Volume — how active trading is right now vs. recent average.\n"
-     "    •  Momentum — whether the price move is accelerating or stalling."),
+    ("Verdicts",
+     "    •  Profitable — positive after-tax margin, ROI of 1% or more, "
+     "and at least 10 traded per hour on each side.\n"
+     "    •  Marginal — still profitable after tax, but a thin ROI or low "
+     "volume.\n"
+     "    •  Suspect — looks too good to be true: ROI over 40%, or the "
+     "price is 25%+ away from its 1-hour average. Often one odd trade or "
+     "manipulation.\n"
+     "    •  Inactive — one side hasn't traded in the last hour, so the "
+     "margin is probably not real.\n"
+     "    •  Unprofitable — (Watchlist only) the tax eats the whole "
+     "margin.\n\n"
+     "Sorting the Verdict column goes Profitable → Marginal → Suspect → "
+     "Inactive, best profit first within each."),
+
+    ("The GE tax",
+     "The seller pays 2% of the sell price, rounded down, per item:\n\n"
+     "    •  Items selling below 50 gp pay no tax (2% is under 1 coin).\n"
+     "    •  The tax is capped at 5M gp per item.\n"
+     "    •  A few items are exempt, such as Old school bonds and some "
+     "basic tools.\n\n"
+     "Rounding down means an item listed at an exact multiple of 50 "
+     "(e.g. 100) earns the seller the same as one coin less (99), so "
+     "undercutting those prices by 1 gp costs you nothing."),
+
+    ("Alerts — big profit opportunities",
+     "While the app is open it checks the market every 5 minutes and logs "
+     "an alert when a flip's Est. profit (calculated as in FlipRec, using "
+     "your capital and item filter) reaches your threshold.\n\n"
+     "    •  Threshold — the picker next to \"Alert when est. profit ≥\". "
+     "1,000,000 by default, in 100,000 steps (arrows or mouse wheel). "
+     "Changing it updates the list straight away: raising it hides "
+     "smaller alerts, lowering it shows them again and adds any new "
+     "ones.\n"
+     "    •  Only actively traded items count: both sides must have "
+     "traded in the last 15 minutes. Suspect items are ignored.\n"
+     "    •  Each item alerts at most once an hour. \"Times\" counts how "
+     "often it has alerted.\n"
+     "    •  New alerts show as a count on the tab, e.g. Alerts (3), and "
+     "flash the taskbar on Windows.\n"
+     "    •  Dismiss selected clears an item; Dismiss all clears "
+     "everything. Alerts are kept for 7 days.\n"
+     "    •  Check now runs a check immediately.\n\n"
+     "Nothing is checked while the app is closed. Without a Capital set "
+     "on FlipRec, quantities are limited only by buy limits and volume, "
+     "so you'll see more (and larger) alerts."),
+
+    ("Watchlist — items you follow",
+     "Your own hand-picked list. To add an item, search it and click "
+     "☆ Add to Watchlist on its result; click ★ On Watchlist to remove it "
+     "again. You can also select rows on the Watchlist tab and click "
+     "Remove selected.\n\n"
+     "Each item shows its live Buy, Sell, Net / item, ROI, volume, last "
+     "trade and verdict, using the same maths as FlipRec. It updates with "
+     "every 5-minute market check, or when you click Refresh. Double-click "
+     "a row to open the item in Search."),
+
+    ("Volatile — big movers",
+     "Scans every item on the Grand Exchange for large price moves. Pick "
+     "a window (5m / 1h / 6h / 24h) to compare the current price with "
+     "that window's average. You'll see the top 100 movers by % change, "
+     "green for up and red for down.\n\n"
+     "Items with under 1,000 units traded in the window are left out to "
+     "cut noise from rarely traded items. Click a header to sort; "
+     "double-click a row to open it in Search."),
+
+    ("Search — look up any item",
+     "Start typing an item name and pick from the dropdown — 'Bandos' "
+     "shows all Bandos gear, 'Bandos chest' narrows it down. Click a "
+     "row, or press Enter for the top match; Escape closes the "
+     "dropdown.\n\n"
+     "The result panel shows:\n"
+     "    •  High buy / Low sell — the latest instant-buy and "
+     "instant-sell prices.\n"
+     "    •  Spread — the gap between them (before tax).\n"
+     "    •  Trend — direction over the item's recent stored prices.\n"
+     "    •  Signal — BUY, HOLD or SELL (see below).\n"
+     "    •  Volume — trading now vs the recent average.\n"
+     "    •  Momentum — whether the move is speeding up or slowing.\n\n"
+     "Buttons: ☆ Add to Watchlist and View history →. Every search also "
+     "saves the item's price history so its History chart is ready."),
 
     ("BUY / HOLD / SELL — what they mean",
-     "The signal is a heuristic, not financial advice. It scores from −3 to +3:\n\n"
+     "The Search signal is a rule of thumb, not financial advice. It "
+     "scores from −3 to +3:\n\n"
      "    +1 / −1   for price direction (rising / falling)\n"
-     "    +1 / −1   for volume confirming or contradicting that direction\n"
-     "    +1 / −1   for momentum (whether the move is speeding up or slowing)\n\n"
+     "    +1 / −1   for volume confirming that direction\n"
+     "    +1 / −1   for momentum (speeding up / slowing)\n\n"
      "Score ≥ 2 → BUY (high), 1 → BUY (moderate), 0 → HOLD, "
-     "−1 → HOLD/SELL, ≤ −2 → SELL.\n\n"
-     "Extreme moves over ±25% trigger a manipulation guard and clamp the "
-     "signal toward neutral."),
+     "−1 → HOLD/SELL, ≤ −2 → SELL. Moves over ±25% trigger a "
+     "manipulation guard that pulls the signal toward neutral."),
 
-    ("Alerts",
-     "Whenever you look up an item, the app compares the live mid-price "
-     "to the last snapshot stored locally. If the price moved by 10% or "
-     "more in either direction, it's logged as an alert. The Alerts tab "
-     "shows the last 50."),
-
-    ("Volatile",
-     "The Volatile tab proactively scans every item on the Grand Exchange "
-     "for significant price movement — no need to look anything up first. "
-     "Pick a window (5m / 1h / 6h / 24h), hit Refresh, and you'll see the "
-     "top 100 movers ranked by absolute % change.\n\n"
-     "Items with under 1,000 units traded in the window are filtered out "
-     "to suppress noise from illiquid junk. Double-click any row to open "
-     "its full price panel in the Search tab."),
+    ("History — price charts",
+     "Charts the high, low and mid price of any item you've searched. "
+     "Pick it from the Item list (Refresh list adds newly searched "
+     "items), then choose a range: 1H, 12H, 1D, 1W, 1M, 1Y or All.\n\n"
+     "History comes from the OSRS Wiki, so you see past prices even for "
+     "an item you only just searched. Short ranges use 5-minute data, "
+     "1W hourly, 1M 6-hourly, and 1Y / All daily. All goes back about a "
+     "year. Refresh chart re-downloads the data."),
 
     ("News",
-     "The News tab caches articles from the official OSRS news RSS feed. "
-     "Click 'Refresh from sources' to pull the latest, then double-click "
-     "any row to open the article in your browser."),
+     "The latest official OSRS news loads automatically when the app "
+     "starts. Refresh from sources fetches it again; Reload cache "
+     "re-reads what's already saved. Double-click an article to open it "
+     "in your browser."),
 
-    ("Price history chart",
-     "The History tab shows a chart of every snapshot the app has stored "
-     "for an item, with high / low / mid lines. The more often you look "
-     "up an item, the richer the chart becomes."),
+    ("How fresh is the data?",
+     "The OSRS Wiki updates prices from the game about every 60 "
+     "seconds. FlipRec fetches when you open it or click Refresh; Alerts "
+     "and Watchlist update every 5 minutes; Search is live each time. "
+     "Last trade (FlipRec, Watchlist) shows exactly how old each margin "
+     "is — always Refresh before you trade."),
 
-    ("Data freshness",
-     "Prices are pulled live every time you run a search — the OSRS Wiki "
-     "API itself updates from in-game data roughly every 60 seconds, so "
-     "that's the upper bound on freshness."),
+    ("Your contact",
+     "The OSRS Wiki provides the price data for free and asks every app "
+     "to identify itself with a way to reach whoever is running it. The "
+     "contact you entered on first launch is sent with every request "
+     "as:\n\n"
+     "    OSRS-Price-Tracker/<version> (contact: <your contact>)\n\n"
+     "It goes to the OSRS Wiki (prices) and runescape.com (news). Use "
+     "Change contact… at the top of this tab to update it."),
+
+    ("Your settings and data",
+     "Your contact, Capital, filters, price format and alert threshold "
+     "are saved automatically, along with your watchlist, alerts and "
+     "price history. They're stored on your computer in:\n\n"
+     "    •  Windows: %APPDATA%\\OSRS Tracker\n"
+     "    •  macOS: ~/Library/Application Support/OSRS Tracker"),
 
     ("Disclaimer",
-     "This is a personal-use tool. It is not affiliated with or endorsed "
-     "by Jagex. Old School RuneScape and related marks are property of "
-     "Jagex Ltd."),
+     "Estimates only — offers can take time to fill and margins can "
+     "close before they do. This is a personal-use tool. It is not "
+     "affiliated with or endorsed by Jagex. Old School RuneScape and "
+     "related marks are property of Jagex Ltd."),
 ]
 
 
@@ -210,11 +357,130 @@ class OSRSTrackerApp:
         self.item_data = []
         self.filtered_items = []  # current dropdown contents
 
+        self.ready = False
+        self._market = None            # (latest, bulk_1h, fetched_at)
+        self._monitor_started = False
+        self._monitor_busy = False
+        self._search_item = None       # item shown in the Search panel
+
         self._configure_root()
         self._build_ui()
 
         db.initialize_db()
+        # A contact is required before any network request (see useragent.py).
+        if not self._ensure_contact():
+            self.root.destroy()
+            return
+        self.ready = True
         self._load_mapping_async()
+        self._refresh_news_from_sources()   # news is ready before you open it
+
+    # ── Contact / User-Agent setup ────────────────────────────────────────────
+
+    def _ensure_contact(self) -> bool:
+        """Apply the saved contact, or run first-time setup. False = quit."""
+        saved = settings.load().get("ua_contact", "")
+        if useragent.is_valid_contact(saved):
+            useragent.set_contact(saved)
+            self._update_contact_label()
+            return True
+        self.root.withdraw()
+        ok = self._contact_dialog(first_run=True)
+        if ok:
+            self.root.deiconify()
+        return ok
+
+    def _contact_dialog(self, first_run: bool) -> bool:
+        """Modal dialog to enter/change the contact. True if saved."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("OSRS Price Tracker — Setup" if first_run
+                  else "Change contact")
+        dlg.configure(bg=COLOR_BG)
+        dlg.resizable(False, False)
+        if not first_run:
+            dlg.transient(self.root)   # (root is hidden on first run)
+
+        body = ttk.Frame(dlg)
+        body.pack(fill="both", expand=True, padx=24, pady=20)
+
+        ttk.Label(body, text="Set your contact" if first_run
+                  else "Change your contact",
+                  style="Header.TLabel").pack(anchor="w", pady=(0, 10))
+        ttk.Label(body, wraplength=480, justify="left", text=(
+            "The OSRS Wiki provides this app's price data for free and asks "
+            "every app to identify itself with a way to contact whoever is "
+            "running it. Enter a contact the Wiki team could reach you on, "
+            "such as your Discord name or an email address.")
+                  ).pack(anchor="w")
+        tk.Label(body, bg=COLOR_BG, fg=COLOR_YELLOW, font=FONT_BODY,
+                 wraplength=480, justify="left", text=(
+                     "Privacy: this is sent with every request to the OSRS "
+                     "Wiki (prices) and runescape.com (news). Don't enter "
+                     "anything you want kept private.")
+                 ).pack(anchor="w", pady=(10, 12))
+
+        current = settings.load().get("ua_contact", "")
+        var = tk.StringVar(value=current)
+        entry = ttk.Entry(body, textvariable=var, width=48)
+        entry.pack(anchor="w", fill="x")
+        entry.focus_set()
+
+        preview = tk.StringVar()
+        ttk.Label(body, textvariable=preview, style="Dim.TLabel",
+                  wraplength=480, justify="left"
+                  ).pack(anchor="w", pady=(8, 0))
+        error = tk.StringVar()
+        tk.Label(body, textvariable=error, bg=COLOR_BG, fg=COLOR_RED,
+                 font=FONT_BODY).pack(anchor="w", pady=(4, 0))
+
+        def update_preview(*_):
+            cleaned = useragent.clean_contact(var.get())
+            preview.set(f"Sent as:  {useragent.build(var.get())}"
+                        if cleaned else "Sent as:  (enter a contact)")
+            error.set("")
+        var.trace_add("write", update_preview)
+        update_preview()
+
+        result = {"ok": False}
+
+        def save(_e=None):
+            if not useragent.is_valid_contact(var.get()):
+                error.set(f"Enter at least {useragent.CONTACT_MIN_LEN} "
+                          "letters, numbers or symbols (no emoji).")
+                return
+            cleaned = useragent.clean_contact(var.get())
+            useragent.set_contact(cleaned)
+            settings.save({"ua_contact": cleaned})
+            self._update_contact_label()
+            result["ok"] = True
+            dlg.destroy()
+
+        def cancel(_e=None):
+            dlg.destroy()
+
+        buttons = ttk.Frame(body)
+        buttons.pack(anchor="e", pady=(14, 0))
+        ttk.Button(buttons, text="Quit" if first_run else "Cancel",
+                   command=cancel).pack(side="right")
+        ttk.Button(buttons, text="Save and continue" if first_run else "Save",
+                   command=save).pack(side="right", padx=(0, 8))
+        dlg.bind("<Return>", save)
+        dlg.bind("<Escape>", cancel)
+        dlg.protocol("WM_DELETE_WINDOW", cancel)
+
+        dlg.update_idletasks()
+        x = (dlg.winfo_screenwidth() - dlg.winfo_reqwidth()) // 2
+        y = (dlg.winfo_screenheight() - dlg.winfo_reqheight()) // 3
+        dlg.geometry(f"+{x}+{y}")
+        dlg.grab_set()
+        dlg.lift()
+        self.root.wait_window(dlg)
+        return result["ok"]
+
+    def _update_contact_label(self):
+        if hasattr(self, "contact_label_var"):
+            self.contact_label_var.set(
+                f"Your contact:  {settings.load().get('ua_contact', '(not set)')}")
 
     # ── Setup ─────────────────────────────────────────────────────────────────
 
@@ -296,6 +562,16 @@ class OSRSTrackerApp:
         self.root.option_add("*TCombobox*Listbox.selectForeground",
                              COLOR_ACCENT_HI)
 
+        style.configure("TSpinbox",
+                        fieldbackground=COLOR_INPUT,
+                        background=COLOR_PANEL_HI,
+                        foreground=COLOR_TEXT,
+                        bordercolor=COLOR_BORDER,
+                        arrowcolor=COLOR_ACCENT)
+        style.map("TSpinbox",
+                  fieldbackground=[("readonly", COLOR_INPUT)],
+                  foreground=[("readonly", COLOR_TEXT)])
+
         # Time-range buttons (History tab)
         style.configure("Range.TButton", padding=(10, 4))
         style.configure("RangeSel.TButton", padding=(10, 4),
@@ -364,18 +640,20 @@ class OSRSTrackerApp:
 
         self.search_tab = self._build_search_tab()
         self.alerts_tab = self._build_alerts_tab()
+        self.watchlist_tab = self._build_watchlist_tab()
         self.volatile_tab = self._build_volatile_tab()
         self.fliprec_tab = self._build_fliprec_tab()
         self.news_tab = self._build_news_tab()
         self.history_tab = self._build_history_tab()
         self.help_tab = self._build_help_tab()
 
-        self.notebook.add(self.search_tab, text="Search")
-        self.notebook.add(self.alerts_tab, text="Alerts")
-        self.notebook.add(self.volatile_tab, text="Volatile")
         self.notebook.add(self.fliprec_tab, text="FlipRec")
-        self.notebook.add(self.news_tab, text="News")
+        self.notebook.add(self.alerts_tab, text="Alerts")
+        self.notebook.add(self.watchlist_tab, text="Watchlist")
+        self.notebook.add(self.volatile_tab, text="Volatile")
+        self.notebook.add(self.search_tab, text="Search")
         self.notebook.add(self.history_tab, text="History")
+        self.notebook.add(self.news_tab, text="News")
         self.notebook.add(self.help_tab, text="Help")
 
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
@@ -391,7 +669,12 @@ class OSRSTrackerApp:
             self.item_data = data
             self.status_var.set(f"{len(data):,} items loaded.")
             self.search_entry.config(state="normal")
-            self.search_entry.focus_set()
+            # Tabs that need the mapping may have been opened while it loaded
+            # (FlipRec is the first tab), so load whichever one is showing.
+            self._on_tab_changed(None)
+            if not self._monitor_started:
+                self._monitor_started = True
+                self._monitor_tick()
 
         run_async(self.root, api.get_mapping, done)
 
@@ -554,13 +837,6 @@ class OSRSTrackerApp:
 
             high = price_data["high"]
             low = price_data.get("low") or high
-            last = db.get_last_recorded_price(item_id)
-            alert = analyzer.check_price_alert(
-                item_id, item_name, high, low, last,
-                threshold=ALERT_THRESHOLD,
-            )
-            if alert:
-                db.record_alert(**alert)
             db.record_price(item_id, item_name, high, low)
 
             # Pull historical points from the API so a first-time search
@@ -576,7 +852,6 @@ class OSRSTrackerApp:
             return {
                 "item": item, "price_data": price_data,
                 "trend": trend, "prediction": prediction,
-                "alert": alert,
             }
 
         def done(payload, err):
@@ -597,7 +872,7 @@ class OSRSTrackerApp:
                   style="Panel.TLabel", justify="center"
                   ).pack(expand=True, pady=20)
 
-    def _render_result(self, item, price_data, trend, prediction, alert):
+    def _render_result(self, item, price_data, trend, prediction):
         for child in self.result_frame.winfo_children():
             child.destroy()
 
@@ -619,21 +894,10 @@ class OSRSTrackerApp:
         ttk.Button(header, text="View history →",
                    command=lambda: self._open_history(item["id"], name)
                    ).pack(side="right")
-
-        # Alert banner
-        if alert:
-            ap = alert["pct_change"]
-            ac = COLOR_GREEN if alert["alert_type"] == "spike" else COLOR_RED
-            banner = tk.Frame(self.result_frame, bg=ac)
-            banner.pack(fill="x", padx=20, pady=4)
-            tk.Label(
-                banner,
-                text=(f"⚠  PRICE ALERT — moved {ap:+.1f}%  "
-                      f"({fmt_gp(alert['old_price'])} → "
-                      f"{fmt_gp(alert['new_price'])} gp)"),
-                bg=ac, fg=COLOR_BG,
-                font=("Georgia", 12, "bold"),
-            ).pack(pady=6)
+        self._search_item = item
+        self.watch_btn = ttk.Button(header, command=self._toggle_watch)
+        self.watch_btn.pack(side="right", padx=(0, 8))
+        self._update_watch_btn()
 
         # Stats grid
         grid = ttk.Frame(self.result_frame, style="Panel.TFrame")
@@ -681,59 +945,336 @@ class OSRSTrackerApp:
 
     # ── Alerts tab ────────────────────────────────────────────────────────────
 
+    ALERT_COLUMNS = [
+        # (tree id, header, width, anchor)
+        ("item",   "Item",          230, "w"),
+        ("buy",    "Buy (gp)",      95,  "e"),
+        ("sell",   "Sell (gp)",     95,  "e"),
+        ("net",    "Net / item",    90,  "e"),
+        ("qty",    "Qty",           75,  "e"),
+        ("profit", "Est. profit",   115, "e"),
+        ("roi",    "ROI",           65,  "e"),
+        ("when",   "Alerted",       110, "w"),
+        ("hits",   "Times",         60,  "e"),
+    ]
+
     def _build_alerts_tab(self) -> ttk.Frame:
+        frame = ttk.Frame(self.notebook)
+
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", padx=20, pady=(20, 6))
+        ttk.Label(bar, text="Alert when est. profit ≥", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        saved = settings.load().get("alert_threshold", ALERT_DEFAULT_THRESHOLD)
+        self.alert_threshold_var = tk.StringVar(value=f"{int(saved):,}")
+        spin = ttk.Spinbox(bar, textvariable=self.alert_threshold_var,
+                           values=ALERT_THRESHOLD_STEPS, state="readonly",
+                           width=13, wrap=False)
+        spin.pack(side="left", padx=(0, 4))
+        # Mouse wheel steps the value too (ttk doesn't do this by default).
+        spin.bind("<MouseWheel>", lambda e: (spin.event_generate(
+            "<<Increment>>" if e.delta > 0 else "<<Decrement>>"), "break")[1])
+        # React to every change (arrows, keyboard, wheel), debounced so
+        # holding an arrow down doesn't re-query on every step.
+        self._threshold_job = None
+        self.alert_threshold_var.trace_add(
+            "write", lambda *_: self._schedule_threshold_change())
+        ttk.Label(bar, text="gp", style="TLabel").pack(side="left",
+                                                       padx=(0, 16))
+
+        self.alerts_check_btn = ttk.Button(
+            bar, text="Check now",
+            command=lambda: self._monitor_tick(manual=True))
+        self.alerts_check_btn.pack(side="left", padx=(0, 8))
+        ttk.Button(bar, text="Dismiss selected",
+                   command=self._dismiss_selected_alerts
+                   ).pack(side="left", padx=(0, 8))
+        ttk.Button(bar, text="Dismiss all",
+                   command=self._dismiss_all_alerts).pack(side="left")
+
+        self.alerts_status = tk.StringVar(value="Waiting for first check…")
+        ttk.Label(bar, textvariable=self.alerts_status, style="Dim.TLabel"
+                  ).pack(side="left", padx=12)
+
+        cols = tuple(c[0] for c in self.ALERT_COLUMNS)
+        tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
+        for cid, label, width, anchor in self.ALERT_COLUMNS:
+            tree.heading(cid, text=label)
+            tree.column(cid, width=width, anchor=anchor)
+        tree.tag_configure("alert", foreground=COLOR_GREEN)
+        tree.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        tree.bind("<Double-Button-1>",
+                  lambda _e: self._open_selected_in_search(
+                      self.alerts_tree, self.alert_id_map))
+        self.alerts_tree = tree
+        self.alert_id_map = {}
+
+        ttk.Label(frame,
+                  text=("Checks the market every 5 minutes while the app is "
+                        "open. Uses your FlipRec capital and item filter. "
+                        "Only items where both sides traded in the last 15 "
+                        "minutes; Suspect items are ignored. Each item "
+                        "alerts at most once an hour; alerts are kept for 7 "
+                        "days. Double-click a row to open it in Search."),
+                  style="Dim.TLabel", wraplength=1000, justify="center"
+                  ).pack(pady=(0, 10))
+        return frame
+
+    def _alert_threshold(self) -> int:
+        try:
+            return int(self.alert_threshold_var.get().replace(",", ""))
+        except ValueError:
+            return ALERT_DEFAULT_THRESHOLD
+
+    def _schedule_threshold_change(self):
+        if self._threshold_job:
+            self.root.after_cancel(self._threshold_job)
+        self._threshold_job = self.root.after(
+            250, self._on_alert_threshold_changed)
+
+    def _on_alert_threshold_changed(self):
+        self._threshold_job = None
+        settings.save({"alert_threshold": self._alert_threshold()})
+        # Re-check the last market snapshot right away with the new threshold.
+        if self._evaluate_alerts():
+            flash_window(self.root)
+        self._render_alerts()
+
+    def _monitor_tick(self, manual: bool = False):
+        """Fetch the market, log profit alerts, refresh Alerts + Watchlist."""
+        if not manual:
+            self.root.after(ALERT_CHECK_MS, self._monitor_tick)
+        if self._monitor_busy or not self.item_data:
+            return
+        self._monitor_busy = True
+        self.alerts_check_btn.config(state="disabled")
+        self.alerts_status.set("Checking the market…")
+
+        def task():
+            return api.get_all_latest_prices(), api.get_bulk_average("1h")
+
+        def done(payload, err):
+            self._monitor_busy = False
+            self.alerts_check_btn.config(state="normal")
+            if err or not payload or not payload[0]:
+                self.alerts_status.set(
+                    f"Check failed: {err}" if err else "Check failed: no data.")
+                return
+            self._market = (payload[0], payload[1], time.time())
+            db.purge_old_alerts()
+            new = self._evaluate_alerts()
+            self._render_alerts()
+            self._render_watchlist()
+            stamp = time.strftime("%H:%M", time.localtime(self._market[2]))
+            self.alerts_status.set(
+                f"Last checked {stamp} · {new} new · next check in 5 min")
+            if new:
+                flash_window(self.root)
+
+        run_async(self.root, task, done)
+
+    def _evaluate_alerts(self) -> int:
+        """Log alerts from the last market snapshot. Returns how many new."""
+        if not self._market or not self.item_data:
+            return 0
+        latest, bulk, fetched_at = self._market
+        rows = analyzer.find_flips(
+            latest, bulk, self.item_data,
+            capital=self._flip_capital() or 0,
+            membership=self._flip_membership(), now=fetched_at)
+        threshold = self._alert_threshold()
+        now = int(time.time())
+        new = 0
+        for r in rows:
+            if (not r["active"] or r["slow"] or r["verdict"] == "Suspect"
+                    or r["profit"] < threshold):
+                continue
+            last = db.last_alert_time(r["item_id"])
+            if last and now - last < ALERT_COOLDOWN:
+                continue
+            db.record_profit_alert(r, now)
+            new += 1
+        return new
+
+    def _render_alerts(self):
+        tree = self.alerts_tree
+        for r in tree.get_children():
+            tree.delete(r)
+        self.alert_id_map.clear()
+        # Only show alerts that still meet the current threshold; raising it
+        # hides smaller ones (they come back if you lower it again).
+        threshold = self._alert_threshold()
+        rows = [a for a in db.get_active_alerts() if a["profit"] >= threshold]
+
+        n = len(rows)
+        self.notebook.tab(self.alerts_tab,
+                          text=f"Alerts ({n})" if n else "Alerts")
+        if not rows:
+            tree.insert("", "end", values=(
+                f"No flips at or above {fmt_gp(threshold)} gp "
+                f"est. profit right now.",
+                *[""] * (len(self.ALERT_COLUMNS) - 1)))
+            return
+        fmt = self._price_fmt()
+        for a in rows:
+            iid = tree.insert("", "end", tags=("alert",), values=(
+                a["item_name"], fmt(a["buy"]), fmt(a["sell"]), fmt(a["net"]),
+                fmt(a["qty"]), fmt(a["profit"]), f"{a['roi']:.1f}%",
+                time.strftime("%m/%d %H:%M", time.localtime(a["timestamp"])),
+                a["n"],
+            ))
+            self.alert_id_map[iid] = a["item_id"]
+
+    def _dismiss_selected_alerts(self):
+        for iid in self.alerts_tree.selection():
+            item_id = self.alert_id_map.get(iid)
+            if item_id:
+                db.dismiss_alerts(item_id)
+        self._render_alerts()
+
+    def _dismiss_all_alerts(self):
+        db.dismiss_alerts()
+        self._render_alerts()
+
+    # ── Watchlist tab ─────────────────────────────────────────────────────────
+
+    WATCH_COLUMNS = [
+        ("item",    "Item",        230, "w"),
+        ("buy",     "Buy (gp)",    95,  "e"),
+        ("sell",    "Sell (gp)",   95,  "e"),
+        ("net",     "Net / item",  90,  "e"),
+        ("roi",     "ROI",         65,  "e"),
+        ("volume",  "Vol/hr",      75,  "e"),
+        ("age",     "Last trade",  80,  "e"),
+        ("verdict", "Verdict",     110, "center"),
+        ("added",   "Added",       100, "w"),
+    ]
+
+    def _build_watchlist_tab(self) -> ttk.Frame:
         frame = ttk.Frame(self.notebook)
 
         bar = ttk.Frame(frame)
         bar.pack(fill="x", padx=20, pady=(20, 10))
         ttk.Button(bar, text="Refresh",
-                   command=self._refresh_alerts).pack(side="left")
-        ttk.Label(bar, text="Recent ≥10% price moves",
+                   command=lambda: self._monitor_tick(manual=True)
+                   ).pack(side="left", padx=(0, 8))
+        ttk.Button(bar, text="Remove selected",
+                   command=self._remove_selected_watch).pack(side="left")
+        ttk.Label(bar, text="Add items with the ☆ button on a Search result.",
                   style="Dim.TLabel").pack(side="left", padx=12)
 
-        cols = ("item", "type", "old", "new", "pct", "time")
+        cols = tuple(c[0] for c in self.WATCH_COLUMNS)
         tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
-        tree.heading("item", text="Item")
-        tree.heading("type", text="Type")
-        tree.heading("old",  text="Old (gp)")
-        tree.heading("new",  text="New (gp)")
-        tree.heading("pct",  text="Change")
-        tree.heading("time", text="When")
-        tree.column("item", width=260, anchor="w")
-        tree.column("type", width=80,  anchor="center")
-        tree.column("old",  width=120, anchor="e")
-        tree.column("new",  width=120, anchor="e")
-        tree.column("pct",  width=100, anchor="e")
-        tree.column("time", width=160, anchor="w")
+        for cid, label, width, anchor in self.WATCH_COLUMNS:
+            tree.heading(cid, text=label)
+            tree.column(cid, width=width, anchor=anchor)
+        tree.tag_configure("good", foreground=COLOR_GREEN)
+        tree.tag_configure("warn", foreground=COLOR_YELLOW)
+        tree.tag_configure("bad", foreground=COLOR_RED)
+        tree.tag_configure("dim", foreground=COLOR_DIM)
+        tree.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        tree.bind("<Double-Button-1>",
+                  lambda _e: self._open_selected_in_search(
+                      self.watch_tree, self.watch_id_map))
+        self.watch_tree = tree
+        self.watch_id_map = {}
 
-        tree.tag_configure("spike", foreground=COLOR_GREEN)
-        tree.tag_configure("drop",  foreground=COLOR_RED)
-
-        tree.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-        self.alerts_tree = tree
+        ttk.Label(frame,
+                  text=("Prices refresh with every market check (every 5 "
+                        "minutes) or when you click Refresh. Margins use the "
+                        "same maths as FlipRec. Double-click a row to open "
+                        "it in Search."),
+                  style="Dim.TLabel", wraplength=1000, justify="center"
+                  ).pack(pady=(0, 10))
         return frame
 
-    def _refresh_alerts(self):
-        for r in self.alerts_tree.get_children():
-            self.alerts_tree.delete(r)
-        rows = db.get_recent_alerts(50)
-        if not rows:
-            self.alerts_tree.insert("", "end",
-                                    values=("No alerts yet.", "", "", "", "", ""))
+    def _render_watchlist(self):
+        tree = self.watch_tree
+        for r in tree.get_children():
+            tree.delete(r)
+        self.watch_id_map.clear()
+        items = db.watchlist_items()
+        if not items:
+            tree.insert("", "end", values=(
+                "Your watchlist is empty. Search an item and click "
+                "☆ Add to Watchlist.", *[""] * (len(self.WATCH_COLUMNS) - 1)))
             return
-        for item_name, atype, old, new, pct, ts in rows:
-            self.alerts_tree.insert(
-                "", "end",
-                values=(
-                    item_name,
-                    atype.upper(),
-                    fmt_gp(old),
-                    fmt_gp(new),
-                    f"{pct:+.1f}%",
-                    time.strftime("%m/%d %H:%M", time.localtime(ts)),
-                ),
-                tags=(atype,),
-            )
+
+        fmt = self._price_fmt()
+        by_id = {it.get("id"): it for it in self.item_data}
+        latest, bulk, fetched_at = self._market or ({}, {}, None)
+        capital = self._flip_capital() or 0
+        for item_id, name, added in items:
+            row = None
+            lt = latest.get(str(item_id))
+            if lt and item_id in by_id:
+                row = analyzer.flip_row(by_id[item_id], lt,
+                                        bulk.get(str(item_id)), capital,
+                                        now=fetched_at)
+            added_s = time.strftime("%m/%d %H:%M", time.localtime(added))
+            if row is None:
+                values = (name, "…" if not self._market else "N/A",
+                          "", "", "", "", "", "", added_s)
+                tag = "dim"
+            else:
+                values = (
+                    name, fmt(row["buy"]), fmt(row["sell"]), fmt(row["net"]),
+                    f"{row['roi']:.1f}%", fmt(row["volume"]),
+                    ("⏱ " if row["slow"] else "") + fmt_age(row["age"]),
+                    "⚠ Inactive" if not row["active"] else row["verdict"],
+                    added_s,
+                )
+                tag = {"Profitable": "good", "Marginal": "warn",
+                       "Suspect": "warn", "Unprofitable": "bad"}.get(
+                           row["verdict"], "dim")
+            iid = tree.insert("", "end", values=values, tags=(tag,))
+            self.watch_id_map[iid] = item_id
+
+    def _remove_selected_watch(self):
+        for iid in self.watch_tree.selection():
+            item_id = self.watch_id_map.get(iid)
+            if item_id:
+                db.watchlist_remove(item_id)
+        self._render_watchlist()
+        self._update_watch_btn()
+
+    def _toggle_watch(self):
+        item = self._search_item
+        if not item:
+            return
+        if db.watchlist_contains(item["id"]):
+            db.watchlist_remove(item["id"])
+        else:
+            db.watchlist_add(item["id"], item["name"])
+        self._update_watch_btn()
+        self._render_watchlist()
+
+    def _update_watch_btn(self):
+        btn = getattr(self, "watch_btn", None)
+        if not self._search_item or not btn or not btn.winfo_exists():
+            return
+        on = db.watchlist_contains(self._search_item["id"])
+        btn.config(text="★ On Watchlist (remove)" if on
+                   else "☆ Add to Watchlist")
+
+    # ── Shared helpers ────────────────────────────────────────────────────────
+
+    def _price_fmt(self):
+        """Price formatter chosen in FlipRec (Short 1.2K / Exact 1,240)."""
+        return (fmt_gp_exact if self.flip_format_var.get().startswith("Exact")
+                else fmt_gp)
+
+    def _open_selected_in_search(self, tree, id_map):
+        sel = tree.selection()
+        item_id = id_map.get(sel[0]) if sel else None
+        item = next((it for it in self.item_data
+                     if it.get("id") == item_id), None) if item_id else None
+        if not item:
+            return
+        self.notebook.select(self.search_tab)
+        self.search_var.set(item["name"])
+        self._hide_dropdown()
+        self._lookup_item(item)
 
     # ── Volatile tab ──────────────────────────────────────────────────────────
 
@@ -1063,6 +1604,7 @@ class OSRSTrackerApp:
                     f"Error: {err}" if err else "Could not fetch prices.")
                 return
             self._flip_raw = (payload[0], payload[1], time.time())
+            self._market = self._flip_raw
             self._apply_flip_filters()
 
         run_async(self.root, task, done)
@@ -1092,6 +1634,9 @@ class OSRSTrackerApp:
         self._render_fliprec_table()
         stamp = time.strftime("%H:%M:%S", time.localtime(fetched_at))
         self.flip_status.set(f"Prices fetched at {stamp}")
+        # Format/capital/filter also apply to the Alerts and Watchlist tabs.
+        self._render_alerts()
+        self._render_watchlist()
 
     def _sort_fliprec(self, key: str, default_desc: bool):
         cur_key, cur_desc = self.flip_sort
@@ -1236,7 +1781,7 @@ class OSRSTrackerApp:
         if not rows:
             self.news_tree.insert(
                 "", "end",
-                values=("No news cached. Click 'Refresh from sources'.", "", "")
+                values=("No news yet. Loading from sources…", "", "")
             )
             return
         for title, url, source, ts in rows:
@@ -1539,6 +2084,16 @@ class OSRSTrackerApp:
     def _build_help_tab(self) -> ttk.Frame:
         frame = ttk.Frame(self.notebook)
 
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", padx=20, pady=(20, 0))
+        self.contact_label_var = tk.StringVar()
+        ttk.Label(bar, textvariable=self.contact_label_var,
+                  style="TLabel").pack(side="left")
+        ttk.Button(bar, text="Change contact…",
+                   command=lambda: self._contact_dialog(first_run=False)
+                   ).pack(side="left", padx=12)
+        self._update_contact_label()
+
         text = scrolledtext.ScrolledText(
             frame, wrap="word",
             background=COLOR_PANEL, foreground=COLOR_TEXT,
@@ -1566,8 +2121,13 @@ class OSRSTrackerApp:
 
     def _on_tab_changed(self, _event):
         tab = self.notebook.nametowidget(self.notebook.select())
-        if tab is self.alerts_tab:
-            self._refresh_alerts()
+        if tab is self.search_tab:
+            if self.item_data:
+                self.search_entry.focus_set()
+        elif tab is self.alerts_tab:
+            self._render_alerts()
+        elif tab is self.watchlist_tab:
+            self._render_watchlist()
         elif tab is self.volatile_tab:
             # Auto-refresh on first visit; subsequent visits keep the table
             # so the user doesn't pay the API cost on every tab switch.
@@ -1587,8 +2147,9 @@ class OSRSTrackerApp:
 
 def main():
     root = tk.Tk()
-    OSRSTrackerApp(root)
-    root.mainloop()
+    app = OSRSTrackerApp(root)
+    if app.ready:              # False if the user quit first-time setup
+        root.mainloop()
 
 
 if __name__ == "__main__":

@@ -11,10 +11,10 @@ from typing import Optional
 import requests
 
 import paths
-from version import USER_AGENT
+import useragent
 
 API_BASE = "https://prices.runescape.wiki/api/v1/osrs"
-HEADERS = {"User-Agent": USER_AGENT}  # defined in version.py
+HEADERS = useragent.HEADERS  # shared; per-install contact, see useragent.py
 MAPPING_FILE = paths.data_file("mapping.json")
 MAPPING_MAX_AGE = 604_800  # 7 days
 
@@ -24,6 +24,7 @@ def get_mapping() -> list:
     Return the full item mapping, refreshing the local cache if it is
     missing, unreadable, or older than MAPPING_MAX_AGE seconds.
     """
+    useragent.require()
     if os.path.exists(MAPPING_FILE):
         age = time.time() - os.path.getmtime(MAPPING_FILE)
         if age < MAPPING_MAX_AGE:
@@ -48,6 +49,7 @@ def get_mapping() -> list:
 
 def get_latest_price(item_id: int) -> Optional[dict]:
     """Latest high / low for a single item."""
+    useragent.require()
     try:
         r = requests.get(f"{API_BASE}/latest?id={item_id}", headers=HEADERS, timeout=10)
         r.raise_for_status()
@@ -62,6 +64,7 @@ def get_timeseries(item_id: int, timestep: str = "1h") -> list:
     timestep: '5m' | '1h' | '6h' | '24h'
     Each point: {timestamp, avgHighPrice, avgLowPrice, highPriceVolume, lowPriceVolume}
     """
+    useragent.require()
     try:
         r = requests.get(
             f"{API_BASE}/timeseries?timestep={timestep}&id={item_id}",
@@ -75,6 +78,7 @@ def get_timeseries(item_id: int, timestep: str = "1h") -> list:
 
 def get_all_latest_prices() -> dict:
     """Bulk fetch — returns {item_id_str: {high, low, ...}} for every item."""
+    useragent.require()
     try:
         r = requests.get(f"{API_BASE}/latest", headers=HEADERS, timeout=20)
         r.raise_for_status()
@@ -89,6 +93,7 @@ def get_bulk_average(timestep: str = "1h") -> dict:
     timestep: '5m' | '1h' | '6h' | '24h'
     Returns {item_id_str: {avgHighPrice, avgLowPrice, highPriceVolume, lowPriceVolume}}
     """
+    useragent.require()
     valid = {"5m", "1h", "6h", "24h"}
     if timestep not in valid:
         raise ValueError(f"timestep must be one of {sorted(valid)}")

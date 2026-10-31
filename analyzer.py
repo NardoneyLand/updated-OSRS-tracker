@@ -1,5 +1,5 @@
 """
-analyzer.py — Trend analysis, alert detection, and buy/hold prediction.
+analyzer.py — Trend analysis, flip/profit maths, and buy/hold prediction.
 """
 
 from typing import List, Optional, Tuple
@@ -52,45 +52,6 @@ def calculate_trend(history: List[Tuple]) -> dict:
 
 
 # ── Alert ─────────────────────────────────────────────────────────────────────
-
-def check_price_alert(
-    item_id: int,
-    item_name: str,
-    current_high: int,
-    current_low: int,
-    last_record: Optional[Tuple],
-    threshold: float = 0.10,
-) -> Optional[dict]:
-    """
-    Return an alert dict if mid-price shifted ≥ threshold (default 10%)
-    since the last recorded snapshot, otherwise None.
-    """
-    if not last_record:
-        return None
-
-    old_high, old_low, _ = last_record
-    if not old_high:
-        return None
-
-    mid_old = (old_high + (old_low or old_high)) / 2
-    mid_new = (current_high + (current_low or current_high)) / 2
-
-    if mid_old == 0:
-        return None
-
-    pct = ((mid_new - mid_old) / mid_old) * 100
-
-    if abs(pct) >= threshold * 100:
-        return {
-            "item_id":    item_id,
-            "item_name":  item_name,
-            "alert_type": "spike" if pct > 0 else "drop",
-            "old_price":  int(mid_old),
-            "new_price":  int(mid_new),
-            "pct_change": round(pct, 2),
-        }
-    return None
-
 
 # ── Prediction ────────────────────────────────────────────────────────────────
 
@@ -306,7 +267,8 @@ REVERSION_THRESHOLD = 3.0     # % away from the 1h average to flag
 REVERSION_EXTREME = 25.0      # beyond this, treat as possible manipulation
 
 # Best verdict first when sorting (higher = better).
-VERDICT_RANK = {"Profitable": 3, "Marginal": 2, "Suspect": 1, "Inactive": 0}
+VERDICT_RANK = {"Profitable": 3, "Marginal": 2, "Suspect": 1, "Inactive": 0,
+                "Unprofitable": -1}
 
 
 def ge_tax(sell_price: int, exempt: bool = False) -> int:
@@ -346,6 +308,93 @@ def reversion_signal(current_mid: float, avg_mid: float) -> Tuple[str, float]:
     return "", pct
 
 
+def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
+             now: Optional[float] = None) -> Optional[dict]:
+    """
+    Flip stats for one item, profitable or not (used by FlipRec, Alerts and
+    the Watchlist). `lt` is the item's /latest entry, `avg` its /1h entry.
+    Returns None if either side has no price.
+
+    Buys at the latest instant-sell price (`low`) and sells at the latest
+    instant-buy price (`high`), minus the GE tax: the same numbers an in-game
+    margin check gives. The 1h averages are used only for volume and as a
+    sanity check: one odd trade shows up as a huge ROI or an extreme move vs
+    the average, and is marked 'Suspect'.
+
+    Keys: item_id, name, buy, sell, tax, net, roi, limit, qty, cost, profit,
+    volume (min per-side 1h volume), age (seconds since the older side last
+    traded), slow (active, but a side idle > FLIP_SLOW_AGE), active,
+    affordable, verdict, reversion, reversion_pct.
+    """
+    import time as _time
+    now = now if now is not None else _time.time()
+    avg = avg or {}
+    item_id = item.get("id")
+    # Latest trades, not 1h averages: averages lag a moving market and
+    # overstate margins (e.g. a buy price that is no longer available).
+    sell, buy = (lt or {}).get("high"), (lt or {}).get("low")
+    if not sell or not buy:
+        return None
+
+    exempt = item.get("name") in GE_TAX_EXEMPT_NAMES
+    tax = ge_tax(sell, exempt)
+    net = sell - tax - buy
+    roi = net / buy * 100
+
+    hv = avg.get("highPriceVolume") or 0
+    lv = avg.get("lowPriceVolume") or 0
+    volume = min(hv, lv)
+
+    high_age = now - (lt.get("highTime") or 0)
+    low_age = now - (lt.get("lowTime") or 0)
+    active = (high_age <= FLIP_MAX_AGE and low_age <= FLIP_MAX_AGE
+              and hv > 0 and lv > 0)
+
+    limit = item.get("limit") or None
+    affordable = True
+    if capital > 0:
+        can_buy = capital // buy
+        affordable = can_buy >= 1
+        qty = min(limit, can_buy) if limit else can_buy
+    else:
+        qty = limit or 0
+    if active and qty:
+        # Realistic fill: you can't buy more than the market trades.
+        # Roughly 4 hours of the slower side's current hourly volume.
+        qty = min(qty, max(1, volume * 4))
+    profit = max(net, 0) * qty
+
+    a_hi, a_lo = avg.get("avgHighPrice"), avg.get("avgLowPrice")
+    if a_hi and a_lo:
+        reversion, rev_pct = reversion_signal((sell + buy) / 2,
+                                              (a_hi + a_lo) / 2)
+    else:
+        reversion, rev_pct = "", 0.0
+
+    if not active:
+        verdict = "Inactive"
+    elif net <= 0:
+        verdict = "Unprofitable"
+    elif roi > FLIP_MAX_ROI or reversion.startswith("Extreme"):
+        verdict = "Suspect"   # too good to be true / possible manipulation
+    elif roi >= FLIP_MIN_ROI and volume >= FLIP_MIN_SIDE_VOLUME:
+        verdict = "Profitable"
+    else:
+        verdict = "Marginal"
+
+    age = max(high_age, low_age)
+    return {
+        "item_id": item_id, "name": item.get("name", f"Item #{item_id}"),
+        "buy": buy, "sell": sell, "tax": tax, "net": net,
+        "roi": round(roi, 2), "limit": limit, "qty": qty,
+        "cost": buy * qty, "profit": profit, "volume": volume,
+        "age": int(age), "active": active,
+        "slow": active and age > FLIP_SLOW_AGE,
+        "affordable": affordable, "verdict": verdict,
+        "reversion": reversion, "reversion_pct": round(rev_pct, 1),
+    }
+
+
 def find_flips(
     latest: dict,
     bulk_1h: dict,
@@ -356,96 +405,24 @@ def find_flips(
     top_n: int = 0,                # 0 = return everything
 ) -> list:
     """
-    Find items where buying at the latest instant-sell price (`low`) and
-    selling at the latest instant-buy price (`high`) leaves a profit after the
-    GE tax — the same numbers an in-game margin check gives. The 1h averages
-    are used only for volume and as a sanity check: one odd trade shows up as
-    a huge ROI or an extreme move vs the average, and is marked 'Suspect'.
-
-    Each result dict: item_id, name, buy, sell, tax, net, roi, limit, qty,
-    cost, profit, volume (min per-side 1h volume), age (seconds since the
-    older side last traded), slow (active, but a side idle > FLIP_SLOW_AGE),
-    active, verdict, reversion, reversion_pct.
-    Items whose buy or sell side has not traded within FLIP_MAX_AGE are kept
-    but flagged active=False / verdict 'Inactive' (their margin is likely
-    phantom).
+    All items with a positive after-tax margin that you can afford at least
+    one of, as flip_row() dicts, best first. Items whose buy or sell side
+    has not traded within FLIP_MAX_AGE are kept but flagged active=False /
+    verdict 'Inactive' (their margin is likely phantom).
     """
-    import time as _time
-    now = now if now is not None else _time.time()
     results = []
-
     for item in mapping:
-        item_id = item.get("id")
         if membership == "members" and not item.get("members"):
             continue
         if membership == "f2p" and item.get("members"):
             continue
-
-        lt = latest.get(str(item_id))
+        item_id = str(item.get("id"))
+        lt = latest.get(item_id)
         if not lt:
             continue
-        avg = bulk_1h.get(str(item_id)) or {}
-        # Latest trades, not 1h averages: averages lag a moving market and
-        # overstate margins (e.g. a buy price that is no longer available).
-        sell, buy = lt.get("high"), lt.get("low")
-        if not sell or not buy:
-            continue
-
-        exempt = item.get("name") in GE_TAX_EXEMPT_NAMES
-        tax = ge_tax(sell, exempt)
-        net = sell - tax - buy
-        if net <= 0:
-            continue
-        roi = net / buy * 100
-
-        hv = avg.get("highPriceVolume") or 0
-        lv = avg.get("lowPriceVolume") or 0
-        volume = min(hv, lv)
-
-        high_age = now - (lt.get("highTime") or 0)
-        low_age = now - (lt.get("lowTime") or 0)
-        active = (high_age <= FLIP_MAX_AGE and low_age <= FLIP_MAX_AGE
-                  and hv > 0 and lv > 0)
-
-        limit = item.get("limit") or None
-        if capital > 0:
-            affordable = capital // buy
-            if affordable < 1:
-                continue          # can't afford even one
-            qty = min(limit, affordable) if limit else affordable
-        else:
-            qty = limit or 0
-        if active and qty:
-            # Realistic fill: you can't buy more than the market trades.
-            # Roughly 4 hours of the slower side's current hourly volume.
-            qty = min(qty, max(1, volume * 4))
-        profit = net * qty
-
-        a_hi, a_lo = avg.get("avgHighPrice"), avg.get("avgLowPrice")
-        if a_hi and a_lo:
-            reversion, rev_pct = reversion_signal((sell + buy) / 2,
-                                                  (a_hi + a_lo) / 2)
-        else:
-            reversion, rev_pct = "", 0.0
-
-        if not active:
-            verdict = "Inactive"
-        elif roi > FLIP_MAX_ROI or reversion.startswith("Extreme"):
-            verdict = "Suspect"   # too good to be true / possible manipulation
-        elif roi >= FLIP_MIN_ROI and volume >= FLIP_MIN_SIDE_VOLUME:
-            verdict = "Profitable"
-        else:
-            verdict = "Marginal"
-
-        results.append({
-            "item_id": item_id, "name": item.get("name", f"Item #{item_id}"),
-            "buy": buy, "sell": sell, "tax": tax, "net": net,
-            "roi": round(roi, 2), "limit": limit, "qty": qty,
-            "cost": buy * qty, "profit": profit, "volume": volume,
-            "age": int(max(high_age, low_age)), "active": active,
-            "slow": active and max(high_age, low_age) > FLIP_SLOW_AGE, "verdict": verdict,
-            "reversion": reversion, "reversion_pct": round(rev_pct, 1),
-        })
+        row = flip_row(item, lt, bulk_1h.get(item_id), capital, now)
+        if row and row["net"] > 0 and row["affordable"]:
+            results.append(row)
 
     # Best first: trustworthy verdicts, then realistic total profit when we
     # know the quantity (else margin per item).
