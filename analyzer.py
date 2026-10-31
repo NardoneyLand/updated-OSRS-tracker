@@ -281,3 +281,169 @@ def find_volatile_items(
 
     results.sort(key=lambda r: abs(r["pct_change"]), reverse=True)
     return results[:top_n]
+
+
+# ── Flip recommendations (FlipRec) ────────────────────────────────────────────
+
+GE_TAX_RATE = 0.02            # 2% of the sell price, per item
+GE_TAX_CAP = 5_000_000        # max tax per item
+# The rate and the exempt list have changed before — verify against the OSRS
+# Wiki "Grand Exchange tax" page. Exempt items pay no tax at any price.
+GE_TAX_EXEMPT_NAMES = {
+    "Old school bond",
+    "Chisel", "Gardening trowel", "Glassblowing pipe", "Hammer", "Needle",
+    "Pestle and mortar", "Rake", "Saw", "Secateurs", "Shears", "Spade",
+    "Watering can",
+}
+
+FLIP_MAX_AGE = 3600           # a side idle longer than this => "Inactive"
+FLIP_MIN_ROI = 1.0            # % net ROI needed to count as "Profitable"
+FLIP_MAX_ROI = 40.0           # above this the margin is probably not real
+FLIP_MIN_SIDE_VOLUME = 10     # min items traded per side in the last hour
+REVERSION_THRESHOLD = 3.0     # % away from the 1h average to flag
+REVERSION_EXTREME = 25.0      # beyond this, treat as possible manipulation
+
+
+def ge_tax(sell_price: int, exempt: bool = False) -> int:
+    """GE tax paid by the seller: floor(2%), so under 50 gp it is 0."""
+    if exempt or sell_price <= 0:
+        return 0
+    return min(int(sell_price * GE_TAX_RATE), GE_TAX_CAP)
+
+
+def parse_gp_amount(text: str) -> int:
+    """Parse '10m', '2.5b', '500k', '1,000,000' into gp. Raises ValueError."""
+    t = (text or "").strip().lower().replace(",", "").replace("_", "")
+    if t.endswith("gp"):
+        t = t[:-2].strip()
+    if not t:
+        return 0
+    mult = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}.get(t[-1])
+    if mult:
+        t = t[:-1]
+    value = float(t) * (mult or 1)
+    if value < 0:
+        raise ValueError("negative amount")
+    return int(value)
+
+
+def reversion_signal(current_mid: float, avg_mid: float) -> Tuple[str, float]:
+    """Compare the current mid price to the window average."""
+    if not avg_mid:
+        return "", 0.0
+    pct = (current_mid - avg_mid) / avg_mid * 100
+    if abs(pct) > REVERSION_EXTREME:
+        return "Extreme move - caution", pct
+    if pct <= -REVERSION_THRESHOLD:
+        return "Dip - may rebound", pct
+    if pct >= REVERSION_THRESHOLD:
+        return "Spike - may fall", pct
+    return "", pct
+
+
+def find_flips(
+    latest: dict,
+    bulk_1h: dict,
+    mapping: list,
+    capital: int = 0,
+    membership: str = "all",      # 'all' | 'members' | 'f2p'
+    now: Optional[float] = None,
+    top_n: int = 0,                # 0 = return everything
+) -> list:
+    """
+    Find items where buying at the 1h-average instant-sell price (avgLowPrice)
+    and selling at the 1h-average instant-buy price (avgHighPrice) leaves a
+    profit after the GE tax. Falls back to the latest trades when an item has
+    no 1h average. The reversion signal compares the latest mid to the average.
+
+    Each result dict: item_id, name, buy, sell, tax, net, roi, limit, qty,
+    cost, profit, volume (min per-side 1h volume), active, verdict,
+    reversion, reversion_pct.
+    Items whose buy or sell side has not traded within FLIP_MAX_AGE are kept
+    but flagged active=False / verdict 'Inactive' (their margin is likely
+    phantom).
+    """
+    import time as _time
+    now = now if now is not None else _time.time()
+    results = []
+
+    for item in mapping:
+        item_id = item.get("id")
+        if membership == "members" and not item.get("members"):
+            continue
+        if membership == "f2p" and item.get("members"):
+            continue
+
+        lt = latest.get(str(item_id))
+        if not lt:
+            continue
+        avg = bulk_1h.get(str(item_id)) or {}
+        # Prefer the 1h average prices: a single odd trade in /latest can
+        # fake a huge margin. Fall back to the latest trade if no average.
+        sell = avg.get("avgHighPrice") or lt.get("high")
+        buy = avg.get("avgLowPrice") or lt.get("low")
+        if not sell or not buy:
+            continue
+
+        exempt = item.get("name") in GE_TAX_EXEMPT_NAMES
+        tax = ge_tax(sell, exempt)
+        net = sell - tax - buy
+        if net <= 0:
+            continue
+        roi = net / buy * 100
+
+        hv = avg.get("highPriceVolume") or 0
+        lv = avg.get("lowPriceVolume") or 0
+        volume = min(hv, lv)
+
+        high_age = now - (lt.get("highTime") or 0)
+        low_age = now - (lt.get("lowTime") or 0)
+        active = (high_age <= FLIP_MAX_AGE and low_age <= FLIP_MAX_AGE
+                  and hv > 0 and lv > 0)
+
+        limit = item.get("limit") or None
+        if capital > 0:
+            affordable = capital // buy
+            if affordable < 1:
+                continue          # can't afford even one
+            qty = min(limit, affordable) if limit else affordable
+        else:
+            qty = limit or 0
+        if active and qty:
+            # Realistic fill: you can't buy more than the market trades.
+            # Roughly 4 hours of the slower side's current hourly volume.
+            qty = min(qty, max(1, volume * 4))
+        profit = net * qty
+
+        a_hi, a_lo = avg.get("avgHighPrice"), avg.get("avgLowPrice")
+        if a_hi and a_lo:
+            reversion, rev_pct = reversion_signal(
+                (lt.get("high", sell) + lt.get("low", buy)) / 2,
+                (a_hi + a_lo) / 2)
+        else:
+            reversion, rev_pct = "", 0.0
+
+        if not active:
+            verdict = "Inactive"
+        elif roi > FLIP_MAX_ROI or reversion.startswith("Extreme"):
+            verdict = "Suspect"   # too good to be true / possible manipulation
+        elif roi >= FLIP_MIN_ROI and volume >= FLIP_MIN_SIDE_VOLUME:
+            verdict = "Profitable"
+        else:
+            verdict = "Marginal"
+
+        results.append({
+            "item_id": item_id, "name": item.get("name", f"Item #{item_id}"),
+            "buy": buy, "sell": sell, "tax": tax, "net": net,
+            "roi": round(roi, 2), "limit": limit, "qty": qty,
+            "cost": buy * qty, "profit": profit, "volume": volume,
+            "active": active, "verdict": verdict,
+            "reversion": reversion, "reversion_pct": round(rev_pct, 1),
+        })
+
+    # Best first: trustworthy verdicts, then realistic total profit when we
+    # know the quantity (else margin per item).
+    rank = {"Profitable": 3, "Marginal": 2, "Suspect": 1, "Inactive": 0}
+    results.sort(key=lambda r: (rank[r["verdict"]], r["profit"] or r["net"]),
+                 reverse=True)
+    return results[:top_n] if top_n else results

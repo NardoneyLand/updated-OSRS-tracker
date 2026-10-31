@@ -23,25 +23,28 @@ MAPPING_MAX_AGE = 604_800  # 7 days
 def get_mapping() -> list:
     """
     Return the full item mapping, refreshing the local cache if it is
-    missing or older than MAPPING_MAX_AGE seconds.
+    missing, unreadable, or older than MAPPING_MAX_AGE seconds.
     """
-    needs_refresh = True
-
     if os.path.exists(MAPPING_FILE):
         age = time.time() - os.path.getmtime(MAPPING_FILE)
         if age < MAPPING_MAX_AGE:
-            needs_refresh = False
+            try:
+                with open(MAPPING_FILE, "r") as fh:
+                    data = json.load(fh)
+                if data:
+                    return data
+            except (OSError, ValueError):
+                pass  # corrupt/empty cache — fall through and re-download
 
-    if needs_refresh:
-        r = requests.get(f"{API_BASE}/mapping", headers=HEADERS, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        with open(MAPPING_FILE, "w") as fh:
-            json.dump(data, fh)
-        return data
-    else:
-        with open(MAPPING_FILE, "r") as fh:
-            return json.load(fh)
+    r = requests.get(f"{API_BASE}/mapping", headers=HEADERS, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    # Write atomically so an interrupted write can't leave a broken cache.
+    tmp = MAPPING_FILE + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, MAPPING_FILE)
+    return data
 
 
 def get_latest_price(item_id: int) -> Optional[dict]:

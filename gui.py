@@ -19,11 +19,27 @@ import analyzer
 import db
 import scraper
 import search as search_module
+import settings
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 ALERT_THRESHOLD = 0.10
 TIMESERIES_STEP = "1h"
+
+# History tab time ranges: (label, window in seconds or None for all time,
+# API timestep used for that window). Coarser steps reach further back:
+# 5m ≈ 1 day, 1h ≈ 15 days, 6h ≈ 90 days, 24h ≈ 1 year.
+HISTORY_RANGES = [
+    ("1H",   3600,        "5m"),
+    ("12H",  12 * 3600,   "5m"),
+    ("1D",   86400,       "5m"),
+    ("1W",   7 * 86400,   "1h"),
+    ("1M",   30 * 86400,  "6h"),
+    ("1Y",   365 * 86400, "24h"),
+    ("All",  None,        "24h"),
+]
+HISTORY_DEFAULT_RANGE = "1W"
+FLIP_MAX_ROWS = 300
 
 # Fantasy / OSRS-inspired palette (avoiding Jagex copyrighted colors directly)
 COLOR_BG       = "#1a120b"   # near-black brown
@@ -248,6 +264,14 @@ class OSRSTrackerApp:
                         bordercolor=COLOR_BORDER,
                         arrowcolor=COLOR_ACCENT)
 
+        # Time-range buttons (History tab)
+        style.configure("Range.TButton", padding=(10, 4))
+        style.configure("RangeSel.TButton", padding=(10, 4),
+                        background=COLOR_ACCENT, foreground=COLOR_BG)
+        style.map("RangeSel.TButton",
+                  background=[("active", COLOR_ACCENT_HI)],
+                  foreground=[("active", COLOR_BG)])
+
         # Notebook
         style.configure("TNotebook", background=COLOR_BG, borderwidth=0,
                         tabmargins=(2, 4, 2, 0))
@@ -309,6 +333,7 @@ class OSRSTrackerApp:
         self.search_tab = self._build_search_tab()
         self.alerts_tab = self._build_alerts_tab()
         self.volatile_tab = self._build_volatile_tab()
+        self.fliprec_tab = self._build_fliprec_tab()
         self.news_tab = self._build_news_tab()
         self.history_tab = self._build_history_tab()
         self.help_tab = self._build_help_tab()
@@ -316,6 +341,7 @@ class OSRSTrackerApp:
         self.notebook.add(self.search_tab, text="Search")
         self.notebook.add(self.alerts_tab, text="Alerts")
         self.notebook.add(self.volatile_tab, text="Volatile")
+        self.notebook.add(self.fliprec_tab, text="FlipRec")
         self.notebook.add(self.news_tab, text="News")
         self.notebook.add(self.history_tab, text="History")
         self.notebook.add(self.help_tab, text="Help")
@@ -508,7 +534,8 @@ class OSRSTrackerApp:
             # Pull historical points from the API so a first-time search
             # already has history (deduped by timestamp).
             ts_data = api.get_timeseries(item_id, timestep=TIMESERIES_STEP)
-            db.backfill_price_history(item_id, item_name, ts_data)
+            db.backfill_price_history(item_id, item_name, ts_data,
+                                    TIMESERIES_STEP)
 
             history = db.get_price_history(item_id, limit=30)
             trend = analyzer.calculate_trend(history)
@@ -855,6 +882,233 @@ class OSRSTrackerApp:
         self._hide_dropdown()
         self._lookup_item(item)
 
+    # ── FlipRec tab ───────────────────────────────────────────────────────────
+
+    FLIP_COLUMNS = [
+        # (tree id, header, data key, width, anchor, default desc)
+        ("item",    "Item",        "name",      230, "w",      False),
+        ("buy",     "Buy (gp)",    "buy",       95,  "e",      False),
+        ("sell",    "Sell (gp)",   "sell",      95,  "e",      True),
+        ("tax",     "GE tax",      "tax",       75,  "e",      True),
+        ("net",     "Net / item",  "net",       90,  "e",      True),
+        ("roi",     "ROI",         "roi",       65,  "e",      True),
+        ("limit",   "4h limit",    "limit",     70,  "e",      True),
+        ("qty",     "Qty",         "qty",       70,  "e",      True),
+        ("profit",  "Est. profit", "profit",    105, "e",      True),
+        ("volume",  "Vol/hr",      "volume",    70,  "e",      True),
+        ("verdict", "Verdict",     "verdict",   95,  "center", False),
+        ("signal",  "Signal",      "reversion", 190, "w",      False),
+    ]
+
+    def _build_fliprec_tab(self) -> ttk.Frame:
+        frame = ttk.Frame(self.notebook)
+        prefs = settings.load()
+
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", padx=20, pady=(20, 6))
+
+        ttk.Label(bar, text="Capital:", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        self.flip_capital_var = tk.StringVar(value=prefs.get("capital", ""))
+        cap_entry = ttk.Entry(bar, textvariable=self.flip_capital_var, width=12)
+        cap_entry.pack(side="left", padx=(0, 16))
+        cap_entry.bind("<Return>", lambda _e: self._apply_flip_filters())
+        cap_entry.bind("<FocusOut>", lambda _e: self._apply_flip_filters())
+
+        ttk.Label(bar, text="Items:", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        self.flip_members_var = tk.StringVar(
+            value=prefs.get("flip_membership", "All items"))
+        mem_combo = ttk.Combobox(
+            bar, textvariable=self.flip_members_var, state="readonly",
+            width=14, values=["All items", "Members only", "F2P only"])
+        mem_combo.pack(side="left", padx=(0, 16))
+        mem_combo.bind("<<ComboboxSelected>>",
+                       lambda _e: self._apply_flip_filters())
+
+        self.flip_hide_inactive_var = tk.BooleanVar(
+            value=prefs.get("flip_hide_inactive", True))
+        ttk.Checkbutton(bar, text="Hide inactive",
+                        variable=self.flip_hide_inactive_var,
+                        command=self._apply_flip_filters
+                        ).pack(side="left", padx=(0, 16))
+
+        self.flip_refresh_btn = ttk.Button(
+            bar, text="Refresh", command=self._refresh_fliprec)
+        self.flip_refresh_btn.pack(side="left")
+
+        self.flip_status = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.flip_status, style="Dim.TLabel"
+                  ).pack(side="left", padx=12)
+
+        # Banner for items that are not actively trading
+        self.flip_banner = tk.StringVar(value="")
+        tk.Label(frame, textvariable=self.flip_banner, bg=COLOR_BG,
+                 fg=COLOR_YELLOW, font=FONT_BODY, anchor="w"
+                 ).pack(fill="x", padx=22, pady=(0, 6))
+
+        cols = tuple(c[0] for c in self.FLIP_COLUMNS)
+        tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
+        for cid, label, key, width, anchor, desc in self.FLIP_COLUMNS:
+            tree.heading(cid, text=label,
+                         command=lambda k=key, d=desc: self._sort_fliprec(k, d))
+            tree.column(cid, width=width, anchor=anchor)
+        tree.tag_configure("good", foreground=COLOR_GREEN)
+        tree.tag_configure("warn", foreground=COLOR_YELLOW)
+        tree.tag_configure("dim", foreground=COLOR_DIM)
+        tree.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        tree.bind("<Double-Button-1>", self._on_fliprec_click)
+        self.flip_tree = tree
+        self.flip_id_map = {}
+        self.flip_results = []        # computed for the current filters
+        self.flip_sort = (None, None)
+        self._flip_raw = None         # (latest, bulk_1h, fetched_at)
+
+        ttk.Label(frame,
+                  text=("Buy at the instant-sell price, sell at the "
+                        "instant-buy price, minus the 2% GE tax, using 1h "
+                        "average prices. Qty is capped by your capital, the "
+                        "4h limit, and ~4h of market volume. Estimates "
+                        "only: offers can take time to fill and margins "
+                        "close quickly. Inactive = a side has not traded in "
+                        "the last hour. Double-click a row to open it in "
+                        "Search."),
+                  style="Dim.TLabel", wraplength=1000, justify="center"
+                  ).pack(pady=(0, 10))
+        return frame
+
+    def _flip_membership(self) -> str:
+        return {"Members only": "members", "F2P only": "f2p"}.get(
+            self.flip_members_var.get(), "all")
+
+    def _flip_capital(self):
+        """Parsed capital in gp, or None if the field is not a valid amount."""
+        try:
+            return analyzer.parse_gp_amount(self.flip_capital_var.get())
+        except ValueError:
+            return None
+
+    def _refresh_fliprec(self):
+        if not self.item_data:
+            self.flip_status.set("Item mapping not loaded yet.")
+            return
+        self.flip_refresh_btn.config(state="disabled")
+        self.flip_status.set("Fetching…")
+
+        def task():
+            return api.get_all_latest_prices(), api.get_bulk_average("1h")
+
+        def done(payload, err):
+            self.flip_refresh_btn.config(state="normal")
+            if err or not payload or not payload[0]:
+                self.flip_status.set(
+                    f"Error: {err}" if err else "Could not fetch prices.")
+                return
+            self._flip_raw = (payload[0], payload[1], time.time())
+            self._apply_flip_filters()
+
+        run_async(self.root, task, done)
+
+    def _apply_flip_filters(self):
+        """Recompute results from the last fetch using the current inputs."""
+        capital = self._flip_capital()
+        if capital is None:
+            self.flip_status.set("Capital must look like 5m, 250k or 1,000,000.")
+            return
+        settings.save({
+            "capital": self.flip_capital_var.get().strip(),
+            "flip_membership": self.flip_members_var.get(),
+            "flip_hide_inactive": bool(self.flip_hide_inactive_var.get()),
+        })
+        if not self._flip_raw:
+            return
+        latest, bulk, fetched_at = self._flip_raw
+        self.flip_results = analyzer.find_flips(
+            latest, bulk, self.item_data, capital=capital,
+            membership=self._flip_membership(),
+        )
+        self.flip_sort = (None, None)
+        self._update_flip_arrows()
+        self._render_fliprec_table()
+        stamp = time.strftime("%H:%M:%S", time.localtime(fetched_at))
+        self.flip_status.set(f"Prices fetched at {stamp}")
+
+    def _sort_fliprec(self, key: str, default_desc: bool):
+        cur_key, cur_desc = self.flip_sort
+        desc = (not cur_desc) if cur_key == key else default_desc
+        self.flip_sort = (key, desc)
+        if key in ("name", "verdict", "reversion"):
+            self.flip_results.sort(key=lambda r: str(r[key]).lower(),
+                                   reverse=desc)
+        else:
+            self.flip_results.sort(key=lambda r: r.get(key) or 0, reverse=desc)
+        self._update_flip_arrows()
+        self._render_fliprec_table()
+
+    def _update_flip_arrows(self):
+        key, desc = self.flip_sort
+        arrow = " ▼" if desc else " ▲"
+        for cid, label, k, *_ in self.FLIP_COLUMNS:
+            self.flip_tree.heading(cid, text=label + (arrow if k == key else ""))
+
+    def _render_fliprec_table(self):
+        tree = self.flip_tree
+        for r in tree.get_children():
+            tree.delete(r)
+        self.flip_id_map.clear()
+
+        hide = self.flip_hide_inactive_var.get()
+        inactive = [r for r in self.flip_results if not r["active"]]
+        rows = [r for r in self.flip_results
+                if r["active"] or not hide][:FLIP_MAX_ROWS]
+
+        if inactive and hide:
+            self.flip_banner.set(
+                f"⚠ {len(inactive)} item(s) hidden: no trade on one side in "
+                f"the last hour, so their margin is likely not real. Untick "
+                f"'Hide inactive' to see them.")
+        elif inactive:
+            self.flip_banner.set(
+                f"⚠ {len(inactive)} item(s) below are inactive (no trade on "
+                f"one side in the last hour); their margins are likely not real.")
+        else:
+            self.flip_banner.set("")
+
+        if not rows:
+            tree.insert("", "end", values=(
+                "No profitable flips found with these filters.",
+                *[""] * (len(self.FLIP_COLUMNS) - 1)))
+            return
+
+        for r in rows:
+            tag = {"Profitable": "good", "Marginal": "warn", "Suspect": "warn"}.get(
+                r["verdict"], "dim")
+            verdict = "⚠ Inactive" if not r["active"] else r["verdict"]
+            sig = r["reversion"]
+            if sig:
+                sig = f"{sig} ({r['reversion_pct']:+.1f}%)"
+            iid = tree.insert("", "end", tags=(tag,), values=(
+                r["name"], fmt_gp(r["buy"]), fmt_gp(r["sell"]),
+                fmt_gp(r["tax"]), fmt_gp(r["net"]), f"{r['roi']:.1f}%",
+                fmt_gp(r["limit"]) if r["limit"] else "?",
+                fmt_gp(r["qty"]) if r["qty"] else "-",
+                fmt_gp(r["profit"]) if r["qty"] else "-",
+                fmt_gp(r["volume"]), verdict, sig,
+            ))
+            self.flip_id_map[iid] = r["item_id"]
+
+    def _on_fliprec_click(self, _event):
+        sel = self.flip_tree.selection()
+        item_id = self.flip_id_map.get(sel[0]) if sel else None
+        item = next((it for it in self.item_data
+                     if it.get("id") == item_id), None) if item_id else None
+        if not item:
+            return
+        self.notebook.select(self.search_tab)
+        self.search_var.set(item["name"])
+        self._hide_dropdown()
+        self._lookup_item(item)
+
     # ── News tab ──────────────────────────────────────────────────────────────
 
     def _build_news_tab(self) -> ttk.Frame:
@@ -966,7 +1220,22 @@ class OSRSTrackerApp:
                    command=self._reload_history_items
                    ).pack(side="left", padx=(0, 8))
         ttk.Button(bar, text="Refresh chart",
-                   command=self._draw_history_chart).pack(side="left")
+                   command=self._refresh_history_chart).pack(side="left")
+
+        # Time-range selector
+        self.history_range = HISTORY_DEFAULT_RANGE
+        self.history_range_btns = {}
+        self._history_fetched = set()   # (item_id, step) pulled this session
+        range_bar = ttk.Frame(frame)
+        range_bar.pack(fill="x", padx=20, pady=(0, 10))
+        ttk.Label(range_bar, text="Range:", style="TLabel").pack(
+            side="left", padx=(0, 8))
+        for label, _secs, _step in HISTORY_RANGES:
+            btn = ttk.Button(range_bar, text=label, style="Range.TButton",
+                             command=lambda l=label: self._set_history_range(l))
+            btn.pack(side="left", padx=(0, 4))
+            self.history_range_btns[label] = btn
+        self._update_range_buttons()
 
         chart_frame = ttk.Frame(frame, style="Panel.TFrame")
         chart_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
@@ -1019,18 +1288,65 @@ class OSRSTrackerApp:
             self._draw_history_chart()
         self.notebook.select(self.history_tab)
 
+    def _update_range_buttons(self):
+        for label, btn in self.history_range_btns.items():
+            btn.configure(style="RangeSel.TButton"
+                          if label == self.history_range else "Range.TButton")
+
+    def _set_history_range(self, label: str):
+        self.history_range = label
+        self._update_range_buttons()
+        self._draw_history_chart()
+
+    def _refresh_history_chart(self):
+        """Re-pull API data for the selected item, then redraw."""
+        name = self.history_item_var.get()
+        item_id = self.history_id_map.get(name)
+        self._history_fetched = {k for k in self._history_fetched
+                                 if k[0] != item_id}
+        self._draw_history_chart()
+
+    def _ensure_history_data(self, item_id: int, item_name: str, step: str):
+        """Fetch + store API history for this item/step once per session."""
+        key = (item_id, step)
+        if key in self._history_fetched:
+            return
+        self._history_fetched.add(key)
+
+        def fetch():
+            points = api.get_timeseries(item_id, timestep=step)
+            return db.backfill_price_history(item_id, item_name, points, step)
+
+        def done(added, err):
+            if err or not added:
+                return
+            if self.history_id_map.get(self.history_item_var.get()) == item_id:
+                self._draw_history_chart()
+
+        run_async(self.root, fetch, done)
+
     def _draw_history_chart(self):
         name = self.history_item_var.get()
         if not name or name not in self.history_id_map:
             return
         item_id = self.history_id_map[name]
-        history = db.get_price_history(item_id, limit=200)
+
+        range_label, window, step = next(
+            r for r in HISTORY_RANGES if r[0] == self.history_range)
+        self._ensure_history_data(item_id, name, step)
+
+        since = int(time.time()) - window if window else 0
+        # Live snapshots only make sense on short ranges; on long ranges
+        # they would just clutter the right edge.
+        history = db.get_price_range(
+            item_id, since, step,
+            include_live=bool(window and window <= 7 * 86400))
 
         if not history:
-            self._history_placeholder("No history rows for this item.")
+            self._history_placeholder(
+                "No price data for this range (it may still be loading).")
             return
 
-        history = list(reversed(history))
         times = [ts for _h, _l, ts in history]
         highs = [h for h, _l, _ts in history]
         lows  = [l for _h, l, _ts in history]
@@ -1061,18 +1377,20 @@ class OSRSTrackerApp:
             y_min, y_max = y_min - pad, y_max + pad
 
         n = len(history)
+        t_min, t_max = times[0], times[-1]
 
         def x_pos(i):
-            if n == 1:
+            # Position by timestamp so mixed-resolution data stays to scale.
+            if t_max == t_min:
                 return ML + plot_w / 2
-            return ML + (i / (n - 1)) * plot_w
+            return ML + ((times[i] - t_min) / (t_max - t_min)) * plot_w
 
         def y_pos(v):
             return MT + plot_h - ((v - y_min) / (y_max - y_min)) * plot_h
 
         # Title
         c.create_text(W / 2, MT / 2,
-                      text=f"{name}  —  {n} snapshots",
+                      text=f"{name}  —  {range_label}  ({n} points)",
                       fill=COLOR_ACCENT, font=("Georgia", 12, "bold"))
 
         # Axes
@@ -1089,11 +1407,18 @@ class OSRSTrackerApp:
                           fill=COLOR_DIM, anchor="e", font=FONT_SMALL)
 
         # X tick labels
-        ticks = max(2, min(8, n))
+        span = t_max - t_min
+        if span <= 2 * 86400:
+            tick_fmt = "%H:%M" if span <= 86400 else "%m/%d %H:%M"
+        elif span <= 90 * 86400:
+            tick_fmt = "%m/%d"
+        else:
+            tick_fmt = "%b %Y" if span > 400 * 86400 else "%m/%d/%y"
+        ticks = 6
         for i in range(ticks):
-            idx = round((n - 1) * i / (ticks - 1)) if ticks > 1 else 0
-            x = x_pos(idx)
-            label = time.strftime("%m/%d %H:%M", time.localtime(times[idx]))
+            t = t_min + span * i / (ticks - 1)
+            x = ML + plot_w * i / (ticks - 1)
+            label = time.strftime(tick_fmt, time.localtime(t))
             c.create_line(x, MT + plot_h, x, MT + plot_h + 4, fill=COLOR_DIM)
             c.create_text(x, MT + plot_h + 18, text=label,
                           fill=COLOR_DIM, font=FONT_SMALL)
@@ -1160,18 +1485,21 @@ class OSRSTrackerApp:
     # ── Tab change handler ────────────────────────────────────────────────────
 
     def _on_tab_changed(self, _event):
-        idx = self.notebook.index(self.notebook.select())
-        # 0 search, 1 alerts, 2 volatile, 3 news, 4 history, 5 help
-        if idx == 1:
+        tab = self.notebook.nametowidget(self.notebook.select())
+        if tab is self.alerts_tab:
             self._refresh_alerts()
-        elif idx == 2:
+        elif tab is self.volatile_tab:
             # Auto-refresh on first visit; subsequent visits keep the table
             # so the user doesn't pay the API cost on every tab switch.
             if not self.volatile_tree.get_children():
                 self._refresh_volatile()
-        elif idx == 3:
+        elif tab is self.fliprec_tab:
+            # Same: fetch on first visit; the Refresh button re-fetches.
+            if self._flip_raw is None:
+                self._refresh_fliprec()
+        elif tab is self.news_tab:
             self._reload_news_cache()
-        elif idx == 4:
+        elif tab is self.history_tab:
             self._reload_history_items()
 
 

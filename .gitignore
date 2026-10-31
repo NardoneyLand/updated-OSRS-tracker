@@ -19,6 +19,9 @@ icon.iconset/
 
 # Local data (regenerated at runtime)
 mapping.json
+settings.json
+settings.json.tmp
+mapping.json.tmp
 osrs_tracker.db
 osrs_tracker.db-journal
 

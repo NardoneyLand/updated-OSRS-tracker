@@ -56,6 +56,12 @@ def initialize_db():
             ON price_history (item_id, timestamp);
     """)
 
+    # Migration: tag rows with the API timestep they came from
+    # (NULL = a live snapshot recorded by a search).
+    cols = [r[1] for r in c.execute("PRAGMA table_info(price_history)")]
+    if "source_step" not in cols:
+        c.execute("ALTER TABLE price_history ADD COLUMN source_step TEXT")
+
     conn.commit()
     conn.close()
 
@@ -73,10 +79,12 @@ def record_price(item_id: int, item_name: str, high: int, low: int):
     conn.close()
 
 
-def backfill_price_history(item_id: int, item_name: str, points: list) -> int:
+def backfill_price_history(item_id: int, item_name: str, points: list,
+                           step: str) -> int:
     """
     Insert historical API timeseries points (avgHighPrice/avgLowPrice/timestamp)
-    that we don't already have. Returns the number of rows added.
+    for the given timestep ('5m' | '1h' | '6h' | '24h') that we don't already
+    have. Returns the number of rows added.
     """
     rows = []
     for pt in points:
@@ -84,30 +92,54 @@ def backfill_price_history(item_id: int, item_name: str, points: list) -> int:
         high, low = pt.get("avgHighPrice"), pt.get("avgLowPrice")
         if ts is None or (high is None and low is None):
             continue
-        rows.append((item_id, item_name, high or low, low or high, int(ts)))
+        rows.append((item_id, item_name, high or low, low or high, int(ts), step))
     if not rows:
         return 0
 
     conn = get_connection()
+    # Rows saved before the source_step column existed are NULL; those were
+    # all 1h backfills or live snapshots, so count them as '1h' for dedup.
     existing = {r[0] for r in conn.execute(
-        "SELECT timestamp FROM price_history WHERE item_id = ?", (item_id,))}
+        "SELECT timestamp FROM price_history WHERE item_id = ? "
+        "AND (source_step = ? OR (? = '1h' AND source_step IS NULL))",
+        (item_id, step, step))}
     new_rows = [r for r in rows if r[4] not in existing]
     conn.executemany(
-        "INSERT INTO price_history (item_id, item_name, high_price, low_price, timestamp) "
-        "VALUES (?, ?, ?, ?, ?)", new_rows)
+        "INSERT INTO price_history "
+        "(item_id, item_name, high_price, low_price, timestamp, source_step) "
+        "VALUES (?, ?, ?, ?, ?, ?)", new_rows)
     conn.commit()
     conn.close()
     return len(new_rows)
 
 
 def get_price_history(item_id: int, limit: int = 50) -> List[Tuple]:
-    """Return rows (high, low, timestamp) newest-first."""
+    """Return rows (high, low, timestamp) newest-first (live + 1h points)."""
     conn = get_connection()
     rows = conn.execute(
         "SELECT high_price, low_price, timestamp "
         "FROM price_history WHERE item_id = ? "
+        "AND (source_step IS NULL OR source_step = '1h') "
         "ORDER BY timestamp DESC LIMIT ?",
         (item_id, limit)
+    ).fetchall()
+    conn.close()
+    return [tuple(r) for r in rows]
+
+
+def get_price_range(item_id: int, since_ts: int, step: str,
+                    include_live: bool) -> List[Tuple]:
+    """
+    Return rows (high, low, timestamp) oldest-first, at or after since_ts, for
+    one API timestep (plus live/legacy snapshots if include_live).
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT high_price, low_price, timestamp "
+        "FROM price_history WHERE item_id = ? AND timestamp >= ? "
+        "AND (source_step = ? OR (? AND source_step IS NULL)) "
+        "ORDER BY timestamp ASC",
+        (item_id, since_ts, step, 1 if include_live else 0)
     ).fetchall()
     conn.close()
     return [tuple(r) for r in rows]
