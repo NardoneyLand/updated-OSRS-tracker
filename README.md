@@ -2,7 +2,7 @@
 
 A desktop app for tracking Old School RuneScape Grand Exchange prices,
 spotting volatile movers, and following live game news. Tkinter GUI,
-distributed as a macOS `.app` bundle.
+distributed as a macOS `.app` bundle and a Windows `.exe`.
 
 Tabs: **Search** · **Alerts** · **Volatile** · **News** · **History** · **Help**
 
@@ -21,15 +21,20 @@ Tabs: **Search** · **Alerts** · **Volatile** · **News** · **History** · **H
 
 ## Install (end users)
 
-Grab the latest release from the [Releases page](https://github.com/NardoneyLand/updated-OSRS-tracker/releases) — pick the `.dmg` or `.zip`, drag `OSRS Tracker.app` to `/Applications`, done.
+Grab the latest release from the [Releases page](https://github.com/NardoneyLand/updated-OSRS-tracker/releases):
 
-First launch, macOS may flag the unsigned build. Right-click the app → **Open** → **Open** to allow it once.
+- **macOS** — pick the `.dmg` or `.zip`, drag `OSRS Tracker.app` to `/Applications`. First launch, macOS may flag the unsigned build: right-click the app → **Open** → **Open** to allow it once.
+- **Windows** — download `OSRS Tracker.exe` and double-click. SmartScreen may warn about an unrecognized publisher: click "More info" → "Run anyway" to allow it once.
 
-App data lives in `~/Library/Application Support/OSRS Tracker/`.
+App data lives in:
+- macOS: `~/Library/Application Support/OSRS Tracker/`
+- Windows: `%APPDATA%\OSRS Tracker\` (i.e. `C:\Users\<you>\AppData\Roaming\OSRS Tracker\`)
 
 ---
 
 ## Run from source (developers)
+
+### macOS
 
 Requires Homebrew Python 3.12 with Tk:
 
@@ -42,9 +47,30 @@ cd updated-OSRS-tracker
 
 `launch.sh` creates a project-local `.venv`, installs deps, verifies Tk, and starts the GUI.
 
+### Windows
+
+Requires Python 3.10+ from [python.org](https://www.python.org/downloads/) (during install: check **Add python.exe to PATH** and keep **tcl/tk and IDLE** enabled).
+
+In PowerShell:
+
+```powershell
+git clone https://github.com/NardoneyLand/updated-OSRS-tracker.git
+cd updated-OSRS-tracker
+.\launch.ps1
+```
+
+`launch.ps1` does the same as `launch.sh` — creates `.venv`, installs deps, verifies Tk, runs the GUI.
+
+If PowerShell blocks the script with a security warning, either run it once with
+`powershell -ExecutionPolicy Bypass -File .\launch.ps1`,
+or unblock scripts for your user with
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
 ---
 
-## Build the `.app`
+## Build a release binary
+
+### macOS — `.app` bundle
 
 ```bash
 ./build.sh                # produces dist/OSRS Tracker.app
@@ -52,9 +78,19 @@ cd updated-OSRS-tracker
 
 Optional icon: drop a square `icon.png` / `icon.jpg` at the project root before building. `build.sh` runs `make_icns.sh` to convert it to a Mac `.icns` and bundles it.
 
+### Windows — `.exe`
+
+```powershell
+.\build.ps1               # produces dist\OSRS Tracker.exe (single file, ~25-40 MB)
+```
+
+Optional icon: drop a square `icon.png` / `icon.jpg` at the project root before building. `build.ps1` uses Pillow (installed only into `.venv`) to convert it to `icon.ico` automatically. Or supply your own `icon.ico`.
+
 ---
 
 ## Cut a release
+
+### macOS
 
 One-time setup:
 
@@ -71,6 +107,17 @@ Then per release:
 
 This builds the `.app`, packages it as both a `.zip` and a `.dmg`, and publishes to GitHub Releases under the given tag.
 
+### Windows
+
+There's no automated `release.ps1` yet. Manual flow:
+
+```powershell
+.\build.ps1
+gh release upload v1.0.0 ".\dist\OSRS Tracker.exe"
+```
+
+(Or use `gh release create v1.0.0 ".\dist\OSRS Tracker.exe"` if you're publishing the tag from Windows for the first time.)
+
 ---
 
 ## Project layout
@@ -84,11 +131,14 @@ analyzer.py         Trend, alert, prediction, volatility logic
 scraper.py          OSRS news RSS scraper
 paths.py            Resolves writable data directory (dev vs. bundled)
 
-OSRS_Tracker.spec   PyInstaller config
-launch.sh           venv setup + run
-build.sh            venv setup + .app build
-release.sh          build + .zip + .dmg + (optional) GitHub publish
-make_icns.sh        Convert icon source to .icns
+OSRS_Tracker.spec   PyInstaller config (cross-platform)
+launch.sh           venv setup + run         (macOS / Linux)
+launch.ps1          venv setup + run         (Windows)
+build.sh            venv setup + .app build  (macOS)
+build.ps1           venv setup + .exe build  (Windows)
+find-python.ps1     shared Python 3.10+ discovery (used by the .ps1 scripts)
+release.sh          build + .zip + .dmg + (optional) GitHub publish (macOS)
+make_icns.sh        Convert icon source to .icns (macOS)
 requirements.txt    Python deps
 ```
 
