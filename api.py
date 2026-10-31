@@ -13,8 +13,11 @@ import requests
 import paths
 
 API_BASE = "https://prices.runescape.wiki/api/v1/osrs"
+# The Wiki asks every app to send a descriptive User-Agent (it can block
+# generic ones). Identify the app by its repo URL, not a person.
 HEADERS = {
-    "User-Agent": "OSRS Price Tracker - personal project, @nardoneyland on discord"
+    "User-Agent": ("OSRS Price Tracker/1.0 "
+                   "(+https://github.com/NardoneyLand/updated-OSRS-tracker)")
 }
 MAPPING_FILE = paths.data_file("mapping.json")
 MAPPING_MAX_AGE = 604_800  # 7 days

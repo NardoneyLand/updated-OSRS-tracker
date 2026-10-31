@@ -146,7 +146,7 @@ requirements.txt    Python deps
 
 ## API & news source
 
-- Prices: [OSRS Wiki Prices API](https://prices.runescape.wiki/) — public, no key, ~60s upstream refresh. Please keep the User-Agent string in `api.py` identifying your build.
+- Prices: [OSRS Wiki Prices API](https://prices.runescape.wiki/) — public, no key, ~60s upstream refresh. The Wiki asks apps to send a descriptive User-Agent; `api.py` identifies this app by its GitHub URL. If you fork it, change that to your own repo.
 - News: official OSRS RSS at `secure.runescape.com/m=news/latest_news.rss?oldschool=1`.
 
 ---
