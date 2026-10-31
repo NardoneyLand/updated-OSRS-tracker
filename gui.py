@@ -266,7 +266,9 @@ HELP_SECTIONS = [
      "everything. Alerts are kept for 7 days.\n"
      "    •  Check now runs a check immediately.\n"
      "    •  Prices — Short (1.2K) or Exact (1,240); the same setting as "
-     "on FlipRec.\n\n"
+     "on FlipRec.\n"
+     "    •  Click a column header to sort (newest first to start); click "
+     "again to reverse. Double-click a row to open it in Search.\n\n"
      "Nothing is checked while the app is closed. Without a Capital set "
      "on FlipRec, quantities are limited only by buy limits and volume, "
      "so you'll see more (and larger) alerts."),
@@ -279,7 +281,9 @@ HELP_SECTIONS = [
      "Each item shows its live Buy, Sell, Net / item, ROI, volume, last "
      "trade and verdict, using the same maths as FlipRec. It updates with "
      "every 5-minute market check, or when you click Refresh. Double-click "
-     "a row to open the item in Search."),
+     "a row to open the item in Search.\n\n"
+     "Click a column header to sort (oldest added first to start); click "
+     "again to reverse. Verdict sorts by rank, as on FlipRec."),
 
     ("Volatile — big movers",
      "Scans every item on the Grand Exchange for large price moves. Pick "
@@ -1050,16 +1054,16 @@ class OSRSTrackerApp:
     # ── Alerts tab ────────────────────────────────────────────────────────────
 
     ALERT_COLUMNS = [
-        # (tree id, header, width, anchor)
-        ("item",   "Item",          230, "w"),
-        ("buy",    "Buy (gp)",      95,  "e"),
-        ("sell",   "Sell (gp)",     95,  "e"),
-        ("net",    "Net / item",    90,  "e"),
-        ("qty",    "Qty",           75,  "e"),
-        ("profit", "Est. profit",   115, "e"),
-        ("roi",    "ROI",           65,  "e"),
-        ("when",   "Alerted",       110, "w"),
-        ("hits",   "Times",         60,  "e"),
+        # (tree id, header, sort key, width, anchor, descending on 1st click)
+        ("item",   "Item",        "item_name", 230, "w", False),
+        ("buy",    "Buy (gp)",    "buy",       95,  "e", True),
+        ("sell",   "Sell (gp)",   "sell",      95,  "e", True),
+        ("net",    "Net / item",  "net",       90,  "e", True),
+        ("qty",    "Qty",         "qty",       75,  "e", True),
+        ("profit", "Est. profit", "profit",    115, "e", True),
+        ("roi",    "ROI",         "roi",       65,  "e", True),
+        ("when",   "Alerted",     "timestamp", 110, "w", True),
+        ("hits",   "Times",       "n",         60,  "e", True),
     ]
 
     def _build_alerts_tab(self) -> ttk.Frame:
@@ -1104,8 +1108,9 @@ class OSRSTrackerApp:
 
         cols = tuple(c[0] for c in self.ALERT_COLUMNS)
         tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
-        for cid, label, width, anchor in self.ALERT_COLUMNS:
-            tree.heading(cid, text=label)
+        for cid, label, key, width, anchor, desc in self.ALERT_COLUMNS:
+            tree.heading(cid, text=label,
+                         command=lambda k=key, d=desc: self._sort_alerts(k, d))
             tree.column(cid, width=width, anchor=anchor)
         tree.tag_configure("alert", foreground=COLOR_GREEN)
         tree.pack(fill="both", expand=True, padx=20, pady=(0, 10))
@@ -1114,6 +1119,9 @@ class OSRSTrackerApp:
                       self.alerts_tree, self.alert_id_map))
         self.alerts_tree = tree
         self.alert_id_map = {}
+        # Kept across refreshes; newest first until a header is clicked.
+        self.alert_sort = ("timestamp", True)
+        self._update_alert_arrows()
 
         ttk.Label(frame,
                   text=("Checks the market every 5 minutes while the app is "
@@ -1221,6 +1229,11 @@ class OSRSTrackerApp:
                 f"est. profit right now.",
                 *[""] * (len(self.ALERT_COLUMNS) - 1)))
             return
+        key, desc = self.alert_sort
+        if key == "item_name":
+            rows.sort(key=lambda a: a["item_name"].lower(), reverse=desc)
+        else:
+            rows.sort(key=lambda a: a[key] or 0, reverse=desc)
         fmt = self._price_fmt()
         for a in rows:
             iid = tree.insert("", "end", tags=("alert",), values=(
@@ -1230,6 +1243,21 @@ class OSRSTrackerApp:
                 a["n"],
             ))
             self.alert_id_map[iid] = a["item_id"]
+
+    def _sort_alerts(self, key: str, default_desc: bool):
+        """Click a header to sort by it; click again to reverse."""
+        cur_key, cur_desc = self.alert_sort
+        desc = (not cur_desc) if cur_key == key else default_desc
+        self.alert_sort = (key, desc)
+        self._update_alert_arrows()
+        self._render_alerts()
+
+    def _update_alert_arrows(self):
+        key, desc = self.alert_sort
+        arrow = " ▼" if desc else " ▲"
+        for cid, label, k, *_ in self.ALERT_COLUMNS:
+            self.alerts_tree.heading(
+                cid, text=label + (arrow if k == key else ""))
 
     def _dismiss_selected_alerts(self):
         for iid in self.alerts_tree.selection():
@@ -1245,15 +1273,16 @@ class OSRSTrackerApp:
     # ── Watchlist tab ─────────────────────────────────────────────────────────
 
     WATCH_COLUMNS = [
-        ("item",    "Item",        230, "w"),
-        ("buy",     "Buy (gp)",    95,  "e"),
-        ("sell",    "Sell (gp)",   95,  "e"),
-        ("net",     "Net / item",  90,  "e"),
-        ("roi",     "ROI",         65,  "e"),
-        ("volume",  "Vol/hr",      75,  "e"),
-        ("age",     "Last trade",  80,  "e"),
-        ("verdict", "Verdict",     110, "center"),
-        ("added",   "Added",       100, "w"),
+        # (tree id, header, sort key, width, anchor, descending on 1st click)
+        ("item",    "Item",        "name",    230, "w",      False),
+        ("buy",     "Buy (gp)",    "buy",     95,  "e",      True),
+        ("sell",    "Sell (gp)",   "sell",    95,  "e",      True),
+        ("net",     "Net / item",  "net",     90,  "e",      True),
+        ("roi",     "ROI",         "roi",     65,  "e",      True),
+        ("volume",  "Vol/hr",      "volume",  75,  "e",      True),
+        ("age",     "Last trade",  "age",     80,  "e",      False),
+        ("verdict", "Verdict",     "verdict", 110, "center", True),
+        ("added",   "Added",       "added",   100, "w",      True),
     ]
 
     def _build_watchlist_tab(self) -> ttk.Frame:
@@ -1271,8 +1300,9 @@ class OSRSTrackerApp:
 
         cols = tuple(c[0] for c in self.WATCH_COLUMNS)
         tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
-        for cid, label, width, anchor in self.WATCH_COLUMNS:
-            tree.heading(cid, text=label)
+        for cid, label, key, width, anchor, desc in self.WATCH_COLUMNS:
+            tree.heading(cid, text=label,
+                         command=lambda k=key, d=desc: self._sort_watchlist(k, d))
             tree.column(cid, width=width, anchor=anchor)
         tree.tag_configure("good", foreground=COLOR_GREEN)
         tree.tag_configure("warn", foreground=COLOR_YELLOW)
@@ -1284,6 +1314,9 @@ class OSRSTrackerApp:
                       self.watch_tree, self.watch_id_map))
         self.watch_tree = tree
         self.watch_id_map = {}
+        # Kept across refreshes; oldest added first until a header is clicked.
+        self.watch_sort = ("added", False)
+        self._update_watch_arrows()
 
         ttk.Label(frame,
                   text=("Prices refresh with every market check (every 5 "
@@ -1310,6 +1343,7 @@ class OSRSTrackerApp:
         by_id = {it.get("id"): it for it in self.item_data}
         latest, bulk, fetched_at = self._market or ({}, {}, None)
         capital = self._flip_capital() or 0
+        entries = []
         for item_id, name, added in items:
             row = None
             lt = latest.get(str(item_id))
@@ -1317,6 +1351,9 @@ class OSRSTrackerApp:
                 row = analyzer.flip_row(by_id[item_id], lt,
                                         bulk.get(str(item_id)), capital,
                                         now=fetched_at)
+            entries.append((item_id, name, added, row))
+
+        for item_id, name, added, row in self._sorted_watch_entries(entries):
             added_s = time.strftime("%m/%d %H:%M", time.localtime(added))
             if row is None:
                 values = (name, "…" if not self._market else "N/A",
@@ -1335,6 +1372,40 @@ class OSRSTrackerApp:
                            row["verdict"], "dim")
             iid = tree.insert("", "end", values=values, tags=(tag,))
             self.watch_id_map[iid] = item_id
+
+    def _sorted_watch_entries(self, entries: list) -> list:
+        """Sort (item_id, name, added, row) by the chosen column. Items with
+        no price data yet stay at the bottom whichever way you sort."""
+        key, desc = self.watch_sort
+        if key == "name":
+            return sorted(entries, key=lambda e: e[1].lower(), reverse=desc)
+        if key == "added":
+            return sorted(entries, key=lambda e: e[2], reverse=desc)
+        priced = [e for e in entries if e[3]]
+        missing = [e for e in entries if not e[3]]
+        if key == "verdict":
+            # Rank, as on FlipRec; best Net / item first within each.
+            priced.sort(key=lambda e: -(e[3]["net"] or 0))
+            priced.sort(key=lambda e: analyzer.VERDICT_RANK[e[3]["verdict"]],
+                        reverse=desc)
+        else:
+            priced.sort(key=lambda e: e[3].get(key) or 0, reverse=desc)
+        return priced + missing
+
+    def _sort_watchlist(self, key: str, default_desc: bool):
+        """Click a header to sort by it; click again to reverse."""
+        cur_key, cur_desc = self.watch_sort
+        desc = (not cur_desc) if cur_key == key else default_desc
+        self.watch_sort = (key, desc)
+        self._update_watch_arrows()
+        self._render_watchlist()
+
+    def _update_watch_arrows(self):
+        key, desc = self.watch_sort
+        arrow = " ▼" if desc else " ▲"
+        for cid, label, k, *_ in self.WATCH_COLUMNS:
+            self.watch_tree.heading(
+                cid, text=label + (arrow if k == key else ""))
 
     def _remove_selected_watch(self):
         for iid in self.watch_tree.selection():
