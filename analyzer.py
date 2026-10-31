@@ -297,6 +297,8 @@ GE_TAX_EXEMPT_NAMES = {
 }
 
 FLIP_MAX_AGE = 3600           # a side idle longer than this => "Inactive"
+FLIP_SLOW_AGE = 900           # idle longer than this => flagged "slow"
+                              # (verdict unchanged, just a warning)
 FLIP_MIN_ROI = 1.0            # % net ROI needed to count as "Profitable"
 FLIP_MAX_ROI = 40.0           # above this the margin is probably not real
 FLIP_MIN_SIDE_VOLUME = 10     # min items traded per side in the last hour
@@ -362,7 +364,8 @@ def find_flips(
 
     Each result dict: item_id, name, buy, sell, tax, net, roi, limit, qty,
     cost, profit, volume (min per-side 1h volume), age (seconds since the
-    older side last traded), active, verdict, reversion, reversion_pct.
+    older side last traded), slow (active, but a side idle > FLIP_SLOW_AGE),
+    active, verdict, reversion, reversion_pct.
     Items whose buy or sell side has not traded within FLIP_MAX_AGE are kept
     but flagged active=False / verdict 'Inactive' (their margin is likely
     phantom).
@@ -439,7 +442,8 @@ def find_flips(
             "buy": buy, "sell": sell, "tax": tax, "net": net,
             "roi": round(roi, 2), "limit": limit, "qty": qty,
             "cost": buy * qty, "profit": profit, "volume": volume,
-            "age": int(max(high_age, low_age)), "active": active, "verdict": verdict,
+            "age": int(max(high_age, low_age)), "active": active,
+            "slow": active and max(high_age, low_age) > FLIP_SLOW_AGE, "verdict": verdict,
             "reversion": reversion, "reversion_pct": round(rev_pct, 1),
         })
 

@@ -1000,7 +1000,7 @@ class OSRSTrackerApp:
         # Banner for items that are not actively trading
         self.flip_banner = tk.StringVar(value="")
         tk.Label(frame, textvariable=self.flip_banner, bg=COLOR_BG,
-                 fg=COLOR_YELLOW, font=FONT_BODY, anchor="w"
+                 fg=COLOR_YELLOW, font=FONT_BODY, anchor="w", justify="left"
                  ).pack(fill="x", padx=22, pady=(0, 6))
 
         cols = tuple(c[0] for c in self.FLIP_COLUMNS)
@@ -1024,7 +1024,8 @@ class OSRSTrackerApp:
                   text=("Buy at the instant-sell price, sell at the "
                         "instant-buy price (latest trades, like an in-game "
                         "margin check), minus the 2% GE tax. Last trade = "
-                        "age of the older side. Qty is capped by your capital, the "
+                        "age of the older side (⏱ = over 15 min). Qty is "
+                        "capped by your capital, the "
                         "4h limit, and ~4h of market volume. Estimates "
                         "only: offers can take time to fill and margins "
                         "close quickly. Inactive = a side has not traded in "
@@ -1132,17 +1133,22 @@ class OSRSTrackerApp:
                 and (show == "All verdicts" or r["verdict"] == show)
                 ][:FLIP_MAX_ROWS]
 
+        banner = []
         if inactive and hide:
-            self.flip_banner.set(
+            banner.append(
                 f"⚠ {len(inactive)} item(s) hidden: no trade on one side in "
                 f"the last hour, so their margin is likely not real. Untick "
                 f"'Hide inactive' to see them.")
         elif inactive:
-            self.flip_banner.set(
-                f"⚠ {len(inactive)} item(s) below are inactive (no trade on "
-                f"one side in the last hour); their margins are likely not real.")
-        else:
-            self.flip_banner.set("")
+            banner.append(
+                f"⚠ {len(inactive)} item(s) are inactive (no trade on one "
+                f"side in the last hour); their margins are likely not real.")
+        slow = sum(1 for r in rows if r["slow"])
+        if slow:
+            banner.append(
+                f"⏱ {slow} listed item(s) have a side not traded in the last "
+                f"15 min; the margin may have moved.")
+        self.flip_banner.set("\n".join(banner))
 
         if not rows:
             tree.insert("", "end", values=(
@@ -1165,7 +1171,9 @@ class OSRSTrackerApp:
                 fmt(r["limit"]) if r["limit"] else "?",
                 fmt(r["qty"]) if r["qty"] else "-",
                 fmt(r["profit"]) if r["qty"] else "-",
-                fmt(r["volume"]), fmt_age(r["age"]), verdict, sig,
+                fmt(r["volume"]),
+                ("⏱ " if r["slow"] else "") + fmt_age(r["age"]),
+                verdict, sig,
             ))
             self.flip_id_map[iid] = r["item_id"]
 
