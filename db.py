@@ -78,6 +78,23 @@ def initialize_db():
     # replaced by profit alerts (profit_alerts).
     c.execute("DROP TABLE IF EXISTS alerts")
 
+    # Migration: one row per (item, API step, timestamp) so concurrent
+    # backfills can't store the same point twice. Live snapshots
+    # (source_step NULL) are exempt. Remove any existing duplicates first.
+    has_unique = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' "
+        "AND name = 'idx_price_unique'").fetchone()
+    if not has_unique:
+        c.execute(
+            "DELETE FROM price_history WHERE source_step IS NOT NULL "
+            "AND id NOT IN (SELECT MIN(id) FROM price_history "
+            "               WHERE source_step IS NOT NULL "
+            "               GROUP BY item_id, source_step, timestamp)")
+        c.execute(
+            "CREATE UNIQUE INDEX idx_price_unique "
+            "ON price_history (item_id, source_step, timestamp) "
+            "WHERE source_step IS NOT NULL")
+
     conn.commit()
     conn.close()
 
@@ -120,13 +137,17 @@ def backfill_price_history(item_id: int, item_name: str, points: list,
         "AND (source_step = ? OR (? = '1h' AND source_step IS NULL))",
         (item_id, step, step))}
     new_rows = [r for r in rows if r[4] not in existing]
+    # OR IGNORE + the unique index make this safe if another backfill for
+    # the same item/step inserted the same points in the meantime.
+    before = conn.total_changes
     conn.executemany(
-        "INSERT INTO price_history "
+        "INSERT OR IGNORE INTO price_history "
         "(item_id, item_name, high_price, low_price, timestamp, source_step) "
         "VALUES (?, ?, ?, ?, ?, ?)", new_rows)
+    added = conn.total_changes - before
     conn.commit()
     conn.close()
-    return len(new_rows)
+    return added
 
 
 def get_price_history(item_id: int, limit: int = 50) -> List[Tuple]:

@@ -358,6 +358,7 @@ class OSRSTrackerApp:
         self._monitor_started = False
         self._monitor_busy = False
         self._search_item = None       # item shown in the Search panel
+        self._lookup_seq = 0           # latest Search lookup (see _lookup_item)
 
         self._configure_root()
         self._build_ui()
@@ -482,11 +483,12 @@ class OSRSTrackerApp:
 
     def _configure_root(self):
         self.root.title("OSRS Price Tracker")
-        # Big enough for the Search panel + chart, but never off-screen.
-        w = min(1250, self.root.winfo_screenwidth() - 80)
-        h = min(860, self.root.winfo_screenheight() - 100)
-        self.root.geometry(f"{w}x{h}")
-        self.root.minsize(min(1000, w), min(640, h))
+        # Big enough for the Search panel + chart, but never off-screen
+        # (120px vertical margin leaves room for taskbars / DPI scaling).
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        self.root.geometry(f"{min(1250, sw - 80)}x{min(860, sh - 120)}")
+        # A fixed floor, so small screens can still shrink or tile the window.
+        self.root.minsize(min(900, sw - 80), min(560, sh - 120))
         self.root.configure(bg=COLOR_BG)
 
         style = ttk.Style()
@@ -765,9 +767,10 @@ class OSRSTrackerApp:
         self.history_canvas = tk.Canvas(
             chart_frame, bg=COLOR_PANEL, highlightthickness=0, height=240)
         self.history_canvas.pack(fill="both", expand=True, padx=10, pady=10)
+        # Every resize redraws, including the first time the canvas is shown,
+        # so the placeholder is centred at the real size.
         self.history_canvas.bind("<Configure>",
                                  lambda _e: self._draw_history_chart())
-        self._history_placeholder("Search for an item to see its price chart.")
 
         return frame
 
@@ -809,9 +812,11 @@ class OSRSTrackerApp:
         for lbl in labels:
             self.dropdown_listbox.insert("end", lbl)
         if not self.dropdown_frame.winfo_ismapped():
-            self.dropdown_frame.pack(side="top", fill="x",
-                                      padx=20, pady=(0, 8),
-                                      before=self.result_frame)
+            # Float the dropdown over the page under the search box, so it
+            # doesn't push the result panel down and squeeze the chart.
+            self.dropdown_frame.place(in_=self.search_entry, relx=0, rely=1,
+                                      relwidth=1, y=2)
+            self.dropdown_frame.lift()
         # auto-select top
         if self.dropdown_listbox.size() > 0:
             self.dropdown_listbox.selection_clear(0, "end")
@@ -819,7 +824,7 @@ class OSRSTrackerApp:
 
     def _hide_dropdown(self):
         if self.dropdown_frame.winfo_ismapped():
-            self.dropdown_frame.pack_forget()
+            self.dropdown_frame.place_forget()
         self.filtered_items = []
 
     def _focus_dropdown(self, _event):
@@ -856,11 +861,20 @@ class OSRSTrackerApp:
 
     def _lookup_item(self, item: dict):
         self._render_message(f"Fetching {item['name']}…")
-        self.history_item = (item["id"], item["name"])
-        self._draw_history_chart()
-
         item_id = item["id"]
         item_name = item["name"]
+
+        # Each lookup gets a number; a slower, older lookup finishing late
+        # must not overwrite the panel for the item now being shown.
+        self._lookup_seq += 1
+        seq = self._lookup_seq
+
+        # The chart follows the latest search. This lookup downloads the
+        # hourly history itself, so mark it fetched (no duplicate request)
+        # and draw once that data has arrived.
+        self.history_item = (item_id, item_name)
+        self._history_fetched.add((item_id, TIMESERIES_STEP))
+        self._history_placeholder(f"Loading {item_name} chart…")
 
         def fetch():
             price_data = api.get_latest_price(item_id)
@@ -887,6 +901,11 @@ class OSRSTrackerApp:
             }
 
         def done(payload, err):
+            if seq != self._lookup_seq:
+                return              # a newer search has replaced this one
+            # Draw the chart whatever happened: stored history may exist
+            # even if the live price fetch failed.
+            self._redraw_chart_if_current(item_id)
             if err:
                 self._render_message(f"Error: {err}")
                 return
@@ -894,9 +913,6 @@ class OSRSTrackerApp:
                 self._render_message(f"No live price data for {item_name}.")
                 return
             self._render_result(**payload)
-            # The lookup just saved fresh history; redraw with it.
-            if self.history_item and self.history_item[0] == item_id:
-                self._draw_history_chart()
 
         run_async(self.root, fetch, done)
 
@@ -1859,12 +1875,23 @@ class OSRSTrackerApp:
 
     # ── Price chart (Search tab) ──────────────────────────────────────────────
 
+    def _chart_size(self):
+        """Canvas (width, height), or None if it isn't on screen yet.
+
+        Tk reports 1x1 for a widget that hasn't been displayed; the
+        <Configure> binding redraws once it has a real size.
+        """
+        c = self.history_canvas
+        w, h = c.winfo_width(), c.winfo_height()
+        return None if w <= 1 or h <= 1 else (w, h)
+
     def _history_placeholder(self, text: str):
+        size = self._chart_size()
+        if not size:
+            return
         c = self.history_canvas
         c.delete("all")
-        w = c.winfo_width() or 800
-        h = c.winfo_height() or 240
-        c.create_text(w / 2, h / 2, text=text,
+        c.create_text(size[0] / 2, size[1] / 2, text=text,
                       fill=COLOR_DIM, font=FONT_BODY)
 
     def _update_range_buttons(self):
@@ -1898,13 +1925,19 @@ class OSRSTrackerApp:
         def done(added, err):
             if err or not added:
                 return
-            if self.history_item and self.history_item[0] == item_id:
-                self._draw_history_chart()
+            self._redraw_chart_if_current(item_id)
 
         run_async(self.root, fetch, done)
 
+    def _redraw_chart_if_current(self, item_id: int):
+        """Redraw only if the chart is still showing this item."""
+        if self.history_item and self.history_item[0] == item_id:
+            self._draw_history_chart()
+
     def _draw_history_chart(self):
         if not self.history_item:
+            self._history_placeholder(
+                "Search for an item to see its price chart.")
             return
         item_id, name = self.history_item
 
@@ -1930,13 +1963,14 @@ class OSRSTrackerApp:
         mids  = [((h or 0) + (l or 0)) / 2 if (h and l)
                  else (h or l or 0) for h, l, _ts in history]
 
+        # Check the size before clearing, so a squeezed canvas keeps its
+        # last drawing instead of going blank.
+        size = self._chart_size()
+        if not size or size[0] < 50 or size[1] < 50:
+            return
+        W, H = size
         c = self.history_canvas
         c.delete("all")
-
-        W = c.winfo_width() or 800
-        H = c.winfo_height() or 400
-        if W < 50 or H < 50:
-            return
 
         ML, MR, MT, MB = 70, 30, 40, 60
         plot_w = W - ML - MR
@@ -2091,7 +2125,6 @@ class OSRSTrackerApp:
                 self._refresh_fliprec()
         elif tab is self.news_tab:
             self._reload_news_cache()
-
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
