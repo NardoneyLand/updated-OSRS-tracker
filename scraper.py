@@ -23,12 +23,9 @@ from typing import Dict, List
 import requests
 from bs4 import BeautifulSoup
 
-SCRAPE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (compatible; OSRS-Tracker/1.0; "
-        "+https://github.com/nardoneyland)"
-    )
-}
+from version import USER_AGENT
+
+SCRAPE_HEADERS = {"User-Agent": USER_AGENT}  # defined in version.py
 
 SOURCES: List[Dict] = [
     {

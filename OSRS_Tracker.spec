@@ -14,6 +14,9 @@ Produces:
 import os
 import sys
 
+sys.path.insert(0, SPECPATH)  # SPECPATH is injected by PyInstaller
+from version import APP_VERSION
+
 block_cipher = None
 
 # Pick an OS-appropriate icon if one is present alongside the spec.
@@ -121,8 +124,8 @@ else:
             icon=ICON_PATH,
             bundle_identifier='com.nardoneyland.osrstracker',
             info_plist={
-                'CFBundleShortVersionString': '1.0.0',
-                'CFBundleVersion': '1.0.0',
+                'CFBundleShortVersionString': APP_VERSION,
+                'CFBundleVersion': APP_VERSION,
                 'NSHighResolutionCapable': 'True',
                 'LSMinimumSystemVersion': '10.13.0',
             },
