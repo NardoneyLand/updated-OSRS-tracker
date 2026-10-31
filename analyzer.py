@@ -303,6 +303,9 @@ FLIP_MIN_SIDE_VOLUME = 10     # min items traded per side in the last hour
 REVERSION_THRESHOLD = 3.0     # % away from the 1h average to flag
 REVERSION_EXTREME = 25.0      # beyond this, treat as possible manipulation
 
+# Best verdict first when sorting (higher = better).
+VERDICT_RANK = {"Profitable": 3, "Marginal": 2, "Suspect": 1, "Inactive": 0}
+
 
 def ge_tax(sell_price: int, exempt: bool = False) -> int:
     """GE tax paid by the seller: floor(2%), so under 50 gp it is 0."""
@@ -351,14 +354,15 @@ def find_flips(
     top_n: int = 0,                # 0 = return everything
 ) -> list:
     """
-    Find items where buying at the 1h-average instant-sell price (avgLowPrice)
-    and selling at the 1h-average instant-buy price (avgHighPrice) leaves a
-    profit after the GE tax. Falls back to the latest trades when an item has
-    no 1h average. The reversion signal compares the latest mid to the average.
+    Find items where buying at the latest instant-sell price (`low`) and
+    selling at the latest instant-buy price (`high`) leaves a profit after the
+    GE tax — the same numbers an in-game margin check gives. The 1h averages
+    are used only for volume and as a sanity check: one odd trade shows up as
+    a huge ROI or an extreme move vs the average, and is marked 'Suspect'.
 
     Each result dict: item_id, name, buy, sell, tax, net, roi, limit, qty,
-    cost, profit, volume (min per-side 1h volume), active, verdict,
-    reversion, reversion_pct.
+    cost, profit, volume (min per-side 1h volume), age (seconds since the
+    older side last traded), active, verdict, reversion, reversion_pct.
     Items whose buy or sell side has not traded within FLIP_MAX_AGE are kept
     but flagged active=False / verdict 'Inactive' (their margin is likely
     phantom).
@@ -378,10 +382,9 @@ def find_flips(
         if not lt:
             continue
         avg = bulk_1h.get(str(item_id)) or {}
-        # Prefer the 1h average prices: a single odd trade in /latest can
-        # fake a huge margin. Fall back to the latest trade if no average.
-        sell = avg.get("avgHighPrice") or lt.get("high")
-        buy = avg.get("avgLowPrice") or lt.get("low")
+        # Latest trades, not 1h averages: averages lag a moving market and
+        # overstate margins (e.g. a buy price that is no longer available).
+        sell, buy = lt.get("high"), lt.get("low")
         if not sell or not buy:
             continue
 
@@ -417,9 +420,8 @@ def find_flips(
 
         a_hi, a_lo = avg.get("avgHighPrice"), avg.get("avgLowPrice")
         if a_hi and a_lo:
-            reversion, rev_pct = reversion_signal(
-                (lt.get("high", sell) + lt.get("low", buy)) / 2,
-                (a_hi + a_lo) / 2)
+            reversion, rev_pct = reversion_signal((sell + buy) / 2,
+                                                  (a_hi + a_lo) / 2)
         else:
             reversion, rev_pct = "", 0.0
 
@@ -437,13 +439,13 @@ def find_flips(
             "buy": buy, "sell": sell, "tax": tax, "net": net,
             "roi": round(roi, 2), "limit": limit, "qty": qty,
             "cost": buy * qty, "profit": profit, "volume": volume,
-            "active": active, "verdict": verdict,
+            "age": int(max(high_age, low_age)), "active": active, "verdict": verdict,
             "reversion": reversion, "reversion_pct": round(rev_pct, 1),
         })
 
     # Best first: trustworthy verdicts, then realistic total profit when we
     # know the quantity (else margin per item).
-    rank = {"Profitable": 3, "Marginal": 2, "Suspect": 1, "Inactive": 0}
-    results.sort(key=lambda r: (rank[r["verdict"]], r["profit"] or r["net"]),
+    results.sort(key=lambda r: (VERDICT_RANK[r["verdict"]],
+                                r["profit"] or r["net"]),
                  reverse=True)
     return results[:top_n] if top_n else results

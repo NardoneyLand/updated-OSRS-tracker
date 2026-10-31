@@ -80,6 +80,26 @@ def fmt_gp(gp) -> str:
     return f"{gp:,}"
 
 
+def fmt_gp_exact(gp) -> str:
+    """Whole-number gp with thousands separators, e.g. 1,240."""
+    if gp is None:
+        return "N/A"
+    try:
+        return f"{int(gp):,}"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def fmt_age(seconds) -> str:
+    """Compact age: 45s, 12m, 3h."""
+    s = int(seconds or 0)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    return f"{s // 3600}h"
+
+
 def trend_arrow(direction: str) -> tuple:
     return {
         "rising":  ("↑", COLOR_GREEN),
@@ -263,6 +283,18 @@ class OSRSTrackerApp:
                         foreground=COLOR_TEXT,
                         bordercolor=COLOR_BORDER,
                         arrowcolor=COLOR_ACCENT)
+        # Read-only comboboxes otherwise render pale text on a light field.
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", COLOR_INPUT)],
+                  foreground=[("readonly", COLOR_TEXT)],
+                  selectbackground=[("readonly", COLOR_INPUT)],
+                  selectforeground=[("readonly", COLOR_TEXT)])
+        self.root.option_add("*TCombobox*Listbox.background", COLOR_INPUT)
+        self.root.option_add("*TCombobox*Listbox.foreground", COLOR_TEXT)
+        self.root.option_add("*TCombobox*Listbox.selectBackground",
+                             COLOR_BORDER)
+        self.root.option_add("*TCombobox*Listbox.selectForeground",
+                             COLOR_ACCENT_HI)
 
         # Time-range buttons (History tab)
         style.configure("Range.TButton", padding=(10, 4))
@@ -889,15 +921,16 @@ class OSRSTrackerApp:
         ("item",    "Item",        "name",      230, "w",      False),
         ("buy",     "Buy (gp)",    "buy",       95,  "e",      False),
         ("sell",    "Sell (gp)",   "sell",      95,  "e",      True),
-        ("tax",     "GE tax",      "tax",       75,  "e",      True),
+        ("tax",     "GE tax (gp)", "tax",       85,  "e",      True),
         ("net",     "Net / item",  "net",       90,  "e",      True),
         ("roi",     "ROI",         "roi",       65,  "e",      True),
         ("limit",   "4h limit",    "limit",     70,  "e",      True),
         ("qty",     "Qty",         "qty",       70,  "e",      True),
-        ("profit",  "Est. profit", "profit",    105, "e",      True),
+        ("profit",  "Est. profit", "profit",    110, "e",      True),
         ("volume",  "Vol/hr",      "volume",    70,  "e",      True),
-        ("verdict", "Verdict",     "verdict",   95,  "center", False),
-        ("signal",  "Signal",      "reversion", 190, "w",      False),
+        ("age",     "Last trade",  "age",       75,  "e",      False),
+        ("verdict", "Verdict",     "verdict",   95,  "center", True),
+        ("signal",  "Signal",      "reversion", 180, "w",      False),
     ]
 
     def _build_fliprec_tab(self) -> ttk.Frame:
@@ -933,6 +966,29 @@ class OSRSTrackerApp:
                         command=self._apply_flip_filters
                         ).pack(side="left", padx=(0, 16))
 
+        ttk.Label(bar, text="Prices:", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        self.flip_format_var = tk.StringVar(
+            value=prefs.get("flip_price_format", "Short (1.2K)"))
+        fmt_combo = ttk.Combobox(
+            bar, textvariable=self.flip_format_var, state="readonly",
+            width=14, values=["Short (1.2K)", "Exact (1,240)"])
+        fmt_combo.pack(side="left", padx=(0, 16))
+        fmt_combo.bind("<<ComboboxSelected>>",
+                       lambda _e: self._apply_flip_filters())
+
+        ttk.Label(bar, text="Show:", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        self.flip_verdict_var = tk.StringVar(
+            value=prefs.get("flip_verdict", "All verdicts"))
+        verdict_combo = ttk.Combobox(
+            bar, textvariable=self.flip_verdict_var, state="readonly",
+            width=12, values=["All verdicts", "Profitable", "Marginal",
+                              "Suspect", "Inactive"])
+        verdict_combo.pack(side="left", padx=(0, 16))
+        verdict_combo.bind("<<ComboboxSelected>>",
+                           lambda _e: self._apply_flip_filters())
+
         self.flip_refresh_btn = ttk.Button(
             bar, text="Refresh", command=self._refresh_fliprec)
         self.flip_refresh_btn.pack(side="left")
@@ -966,8 +1022,9 @@ class OSRSTrackerApp:
 
         ttk.Label(frame,
                   text=("Buy at the instant-sell price, sell at the "
-                        "instant-buy price, minus the 2% GE tax, using 1h "
-                        "average prices. Qty is capped by your capital, the "
+                        "instant-buy price (latest trades, like an in-game "
+                        "margin check), minus the 2% GE tax. Last trade = "
+                        "age of the older side. Qty is capped by your capital, the "
                         "4h limit, and ~4h of market volume. Estimates "
                         "only: offers can take time to fill and margins "
                         "close quickly. Inactive = a side has not traded in "
@@ -1019,6 +1076,8 @@ class OSRSTrackerApp:
             "capital": self.flip_capital_var.get().strip(),
             "flip_membership": self.flip_members_var.get(),
             "flip_hide_inactive": bool(self.flip_hide_inactive_var.get()),
+            "flip_price_format": self.flip_format_var.get(),
+            "flip_verdict": self.flip_verdict_var.get(),
         })
         if not self._flip_raw:
             return
@@ -1037,7 +1096,14 @@ class OSRSTrackerApp:
         cur_key, cur_desc = self.flip_sort
         desc = (not cur_desc) if cur_key == key else default_desc
         self.flip_sort = (key, desc)
-        if key in ("name", "verdict", "reversion"):
+        if key == "verdict":
+            # Rank, not alphabetical: ▼ = Profitable, Marginal, Suspect,
+            # Inactive; ▲ reverses it. Ties keep the best profit first.
+            self.flip_results.sort(key=lambda r: -(r["profit"] or r["net"]))
+            self.flip_results.sort(
+                key=lambda r: analyzer.VERDICT_RANK[r["verdict"]],
+                reverse=desc)
+        elif key in ("name", "reversion"):
             self.flip_results.sort(key=lambda r: str(r[key]).lower(),
                                    reverse=desc)
         else:
@@ -1057,10 +1123,14 @@ class OSRSTrackerApp:
             tree.delete(r)
         self.flip_id_map.clear()
 
-        hide = self.flip_hide_inactive_var.get()
+        show = self.flip_verdict_var.get()
+        # Choosing "Inactive" in the Show filter overrides Hide inactive.
+        hide = self.flip_hide_inactive_var.get() and show != "Inactive"
         inactive = [r for r in self.flip_results if not r["active"]]
         rows = [r for r in self.flip_results
-                if r["active"] or not hide][:FLIP_MAX_ROWS]
+                if (r["active"] or not hide)
+                and (show == "All verdicts" or r["verdict"] == show)
+                ][:FLIP_MAX_ROWS]
 
         if inactive and hide:
             self.flip_banner.set(
@@ -1080,6 +1150,8 @@ class OSRSTrackerApp:
                 *[""] * (len(self.FLIP_COLUMNS) - 1)))
             return
 
+        fmt = (fmt_gp_exact if self.flip_format_var.get().startswith("Exact")
+               else fmt_gp)
         for r in rows:
             tag = {"Profitable": "good", "Marginal": "warn", "Suspect": "warn"}.get(
                 r["verdict"], "dim")
@@ -1088,12 +1160,12 @@ class OSRSTrackerApp:
             if sig:
                 sig = f"{sig} ({r['reversion_pct']:+.1f}%)"
             iid = tree.insert("", "end", tags=(tag,), values=(
-                r["name"], fmt_gp(r["buy"]), fmt_gp(r["sell"]),
-                fmt_gp(r["tax"]), fmt_gp(r["net"]), f"{r['roi']:.1f}%",
-                fmt_gp(r["limit"]) if r["limit"] else "?",
-                fmt_gp(r["qty"]) if r["qty"] else "-",
-                fmt_gp(r["profit"]) if r["qty"] else "-",
-                fmt_gp(r["volume"]), verdict, sig,
+                r["name"], fmt(r["buy"]), fmt(r["sell"]),
+                fmt(r["tax"]), fmt(r["net"]), f"{r['roi']:.1f}%",
+                fmt(r["limit"]) if r["limit"] else "?",
+                fmt(r["qty"]) if r["qty"] else "-",
+                fmt(r["profit"]) if r["qty"] else "-",
+                fmt(r["volume"]), fmt_age(r["age"]), verdict, sig,
             ))
             self.flip_id_map[iid] = r["item_id"]
 
