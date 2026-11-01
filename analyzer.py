@@ -258,10 +258,13 @@ GE_TAX_EXEMPT_NAMES = {
 }
 
 FLIP_MAX_AGE = 3600           # a side idle longer than this => "Inactive"
-FLIP_SLOW_AGE = 900           # idle longer than this => flagged "slow"
-                              # (verdict unchanged, just a warning)
+FLIP_SLOW_AGE = 300           # idle longer than this => flagged "slow": no
+                              # alerts, and a warning on the other tabs
 FLIP_MIN_ROI = 1.0            # % net ROI needed to count as "Profitable"
 FLIP_MAX_ROI = 40.0           # above this the margin is probably not real
+FLIP_MIN_5M_SUPPORT = 0.5     # the 5m averages must back up this share of the
+                              # margin. In practice real margins sit near 100%
+                              # and one-off trades at 0% or below.
 FLIP_MIN_SIDE_VOLUME = 10     # min items traded per side in the last hour
 REVERSION_THRESHOLD = 3.0     # % away from the 1h average to flag
 REVERSION_EXTREME = 25.0      # beyond this, treat as possible manipulation
@@ -308,23 +311,42 @@ def reversion_signal(current_mid: float, avg_mid: float) -> Tuple[str, float]:
     return "", pct
 
 
+def margin_at_5m_prices(avg_5m: Optional[dict], buy: int, sell: int, net: int,
+                        exempt: bool) -> Tuple[Optional[int], bool]:
+    """
+    What the margin would be at the last 5 minutes' average prices, and whether
+    that backs up the margin from the latest trades. A side with no trades in
+    the window keeps its latest price, so the other side is still checked.
+    No 5m data at all proves nothing either way, so it counts as backed up.
+    """
+    avg_5m = avg_5m or {}
+    avg_sell, avg_buy = avg_5m.get("avgHighPrice"), avg_5m.get("avgLowPrice")
+    if not avg_sell and not avg_buy:
+        return None, True
+    sell_5m = avg_sell or sell
+    net_5m = int(sell_5m - ge_tax(sell_5m, exempt) - (avg_buy or buy))
+    return net_5m, net <= 0 or net_5m >= net * FLIP_MIN_5M_SUPPORT
+
+
 def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
-             now: Optional[float] = None) -> Optional[dict]:
+             now: Optional[float] = None,
+             avg_5m: Optional[dict] = None) -> Optional[dict]:
     """
     Flip stats for one item, profitable or not (used by FlipRec, Alerts and
-    the Watchlist). `lt` is the item's /latest entry, `avg` its /1h entry.
-    Returns None if either side has no price.
+    the Watchlist). `lt` is the item's /latest entry, `avg` its /1h entry,
+    `avg_5m` its /5m entry if known. Returns None if either side has no price.
 
     Buys at the latest instant-sell price (`low`) and sells at the latest
     instant-buy price (`high`), minus the GE tax: the same numbers an in-game
-    margin check gives. The 1h averages are used only for volume and as a
-    sanity check: one odd trade shows up as a huge ROI or an extreme move vs
-    the average, and is marked 'Suspect'.
+    margin check gives. The averages are used only for volume and as a sanity
+    check: one odd trade shows up as a huge ROI, an extreme move vs the 1h
+    average or a margin the 5m averages don't back up, and is marked 'Suspect'.
 
     Keys: item_id, name, buy, sell, tax, net, roi, limit, qty, cost, profit,
     volume (min per-side 1h volume), age (seconds since the older side last
-    traded), slow (active, but a side idle > FLIP_SLOW_AGE), active,
-    affordable, verdict, reversion, reversion_pct.
+    traded), traded_at (when that was), slow (active, but a side idle >
+    FLIP_SLOW_AGE), active, affordable, verdict, reversion, reversion_pct,
+    net_5m (the margin at 5m average prices, None without 5m data), backed_5m.
     """
     import time as _time
     now = now if now is not None else _time.time()
@@ -371,11 +393,14 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
     else:
         reversion, rev_pct = "", 0.0
 
+    net_5m, backed_5m = margin_at_5m_prices(avg_5m, buy, sell, net, exempt)
+
     if not active:
         verdict = "Inactive"
     elif net <= 0:
         verdict = "Unprofitable"
-    elif roi > FLIP_MAX_ROI or reversion.startswith("Extreme"):
+    elif (roi > FLIP_MAX_ROI or reversion.startswith("Extreme")
+          or not backed_5m):
         verdict = "Suspect"   # too good to be true / possible manipulation
     elif roi >= FLIP_MIN_ROI and volume >= FLIP_MIN_SIDE_VOLUME:
         verdict = "Profitable"
@@ -388,10 +413,11 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
         "buy": buy, "sell": sell, "tax": tax, "net": net,
         "roi": round(roi, 2), "limit": limit, "qty": qty,
         "cost": buy * qty, "profit": profit, "volume": volume,
-        "age": int(age), "active": active,
+        "age": int(age), "traded_at": int(now - age), "active": active,
         "slow": active and age > FLIP_SLOW_AGE,
         "affordable": affordable, "verdict": verdict,
         "reversion": reversion, "reversion_pct": round(rev_pct, 1),
+        "net_5m": net_5m, "backed_5m": backed_5m,
     }
 
 
@@ -403,6 +429,7 @@ def find_flips(
     membership: str = "all",      # 'all' | 'members' | 'f2p'
     now: Optional[float] = None,
     top_n: int = 0,                # 0 = return everything
+    bulk_5m: Optional[dict] = None,
 ) -> list:
     """
     All items with a positive after-tax margin that you can afford at least
@@ -410,6 +437,7 @@ def find_flips(
     has not traded within FLIP_MAX_AGE are kept but flagged active=False /
     verdict 'Inactive' (their margin is likely phantom).
     """
+    bulk_5m = bulk_5m or {}
     results = []
     for item in mapping:
         if membership == "members" and not item.get("members"):
@@ -420,7 +448,8 @@ def find_flips(
         lt = latest.get(item_id)
         if not lt:
             continue
-        row = flip_row(item, lt, bulk_1h.get(item_id), capital, now)
+        row = flip_row(item, lt, bulk_1h.get(item_id), capital, now,
+                       bulk_5m.get(item_id))
         if row and row["net"] > 0 and row["affordable"]:
             results.append(row)
 

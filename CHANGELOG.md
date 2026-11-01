@@ -3,6 +3,32 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.2.0 — 2026-11-01
+
+**New**
+- Alerts now stay live. Their prices update with every check, and an alert
+  disappears by itself once the flip stops qualifying. If it qualifies again
+  it comes back.
+- Choose how often the market is checked: every 1, 5, 15 or 30 minutes
+  (Refresh on the Alerts tab, 1 minute by default). Watchlist prices follow
+  the same timer.
+- Last trade now shows on Alerts and Search as well as FlipRec and Watchlist,
+  and it keeps counting up between checks.
+
+**Changed**
+- You'll see fewer alerts, but more reliable ones. Both sides must now have
+  traded in the last 5 minutes (it was 15), and the ⏱ warning on FlipRec and
+  Watchlist also starts at 5 minutes.
+- A margin the last 5 minutes' average prices don't back up is now marked
+  Suspect and won't alert. FlipRec's Signal column shows the reason.
+
+**Fixed**
+- Long model names no longer get cut off in the Ask AI model dropdown.
+- FlipRec's table now fits the window, so Last trade and Signal aren't cut off.
+- The notes under the FlipRec and Alerts tables are no longer cut off.
+- A refresh no longer clears your selected rows or scroll position on Alerts
+  and Watchlist.
+
 ## 1.1.0 — 2026-11-01
 
 **New**

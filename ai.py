@@ -66,9 +66,11 @@ per item. A few items are exempt. Margins from the tools are already after tax.
 - suggested_qty is capped by the user's capital, the item's 4-hour buy limit \
 and about 4 hours of market volume. est_profit assumes that quantity fills.
 - Verdicts: Profitable has at least 1% ROI and at least 10 items an hour on each \
-side. Marginal is positive but falls short of that. Suspect has an ROI above 40% \
-or an extreme move, so the margin may not be real. Inactive means a side has not \
-traded for an hour.
+side. Marginal is positive but falls short of that. Suspect has an ROI above 40%, \
+an extreme move, or a margin the last 5 minutes' average prices don't back up, so \
+the margin may not be real. Inactive means a side has not traded for an hour.
+- last_trade_age_seconds is how long ago the older side traded. Over 5 minutes, \
+treat the margin as possibly out of date and say so.
 - The Buy / Hold / Sell signal is a simple score from recent price direction, \
 volume and momentum, not a forecast.
 

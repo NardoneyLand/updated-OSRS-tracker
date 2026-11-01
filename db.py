@@ -74,6 +74,17 @@ def initialize_db():
     if "source_step" not in cols:
         c.execute("ALTER TABLE price_history ADD COLUMN source_step TEXT")
 
+    # Migration: alerts now track live prices and expire (see
+    # sync_profit_alerts). updated = when the prices were last confirmed.
+    cols = [r[1] for r in c.execute("PRAGMA table_info(profit_alerts)")]
+    if "expired" not in cols:
+        c.execute("ALTER TABLE profit_alerts "
+                  "ADD COLUMN expired INTEGER NOT NULL DEFAULT 0")
+    if "updated" not in cols:
+        c.execute("ALTER TABLE profit_alerts ADD COLUMN updated INTEGER")
+    if "traded_at" not in cols:
+        c.execute("ALTER TABLE profit_alerts ADD COLUMN traded_at INTEGER")
+
     # Migration: the old "moved 10% since your last search" alerts were
     # replaced by profit alerts (profit_alerts).
     c.execute("DROP TABLE IF EXISTS alerts")
@@ -184,44 +195,86 @@ def get_price_range(item_id: int, since_ts: int, step: str,
 
 # ── Profit alerts ─────────────────────────────────────────────────────────────
 
-ALERT_RETENTION = 7 * 86400   # keep alerts for 7 days
+ALERT_RETENTION = 7 * 86400   # keep alert history for 7 days
 
 
-def record_profit_alert(row: dict, ts: Optional[int] = None):
-    """Store one alert from an analyzer.find_flips() result row."""
+def sync_profit_alerts(rows: List[dict], cooldown: int,
+                       ts: Optional[int] = None) -> Tuple[int, int]:
+    """
+    Make the alerts match the flips that qualify right now (analyzer.find_flips()
+    rows). Returns (new alerts, alerts that just expired).
+
+      - Qualifies, and the item last alerted over `cooldown` ago: a new alert.
+      - Qualifies, within the cooldown: its alert gets the live numbers, and
+        comes back quietly if it had expired. One the user dismissed stays
+        hidden until the cooldown ends.
+      - Doesn't qualify: its alert expires.
+
+    One transaction, so a check every minute stays cheap however many flips
+    qualify.
+    """
+    now = int(ts or time.time())
+    conn = get_connection()
+    latest = {r["item_id"]: r for r in conn.execute(
+        "SELECT a.id, a.item_id, a.timestamp, a.dismissed, a.expired "
+        "FROM profit_alerts a "
+        "JOIN (SELECT MAX(id) AS mid FROM profit_alerts GROUP BY item_id) c "
+        "  ON a.id = c.mid")}
+
+    new = 0
+    for row in rows:
+        prev = latest.get(row["item_id"])
+        live = (row["buy"], row["sell"], row["net"], row["qty"], row["profit"],
+                row["roi"], row.get("traded_at"), now)
+        if prev is None or now - prev["timestamp"] >= cooldown:
+            conn.execute(
+                "INSERT INTO profit_alerts (buy, sell, net, qty, profit, roi, "
+                "traded_at, updated, item_id, item_name, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                live + (row["item_id"], row["name"], now))
+            new += 1
+        elif not prev["dismissed"]:
+            conn.execute(
+                "UPDATE profit_alerts SET buy = ?, sell = ?, net = ?, qty = ?, "
+                "profit = ?, roi = ?, traded_at = ?, updated = ?, expired = 0 "
+                "WHERE id = ?",
+                live + (prev["id"],))
+
+    qualifying = {row["item_id"] for row in rows}
+    gone = [(item_id,) for item_id, prev in latest.items()
+            if item_id not in qualifying
+            and not prev["dismissed"] and not prev["expired"]]
+    conn.executemany("UPDATE profit_alerts SET expired = 1 "
+                     "WHERE item_id = ? AND dismissed = 0", gone)
+    conn.commit()
+    conn.close()
+    return new, len(gone)
+
+
+def expire_stale_alerts(max_age: int) -> None:
+    """Expire alerts whose prices haven't been confirmed for max_age seconds,
+    such as those left from the last session or when checks keep failing."""
     conn = get_connection()
     conn.execute(
-        "INSERT INTO profit_alerts "
-        "(item_id, item_name, buy, sell, net, qty, profit, roi, timestamp) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (row["item_id"], row["name"], row["buy"], row["sell"], row["net"],
-         row["qty"], row["profit"], row["roi"], int(ts or time.time()))
-    )
+        "UPDATE profit_alerts SET expired = 1 WHERE expired = 0 "
+        "AND dismissed = 0 AND COALESCE(updated, timestamp) < ?",
+        (int(time.time()) - max_age,))
     conn.commit()
     conn.close()
 
 
-def last_alert_time(item_id: int) -> Optional[int]:
-    """Most recent alert for an item, dismissed or not (for the cooldown)."""
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT MAX(timestamp) FROM profit_alerts WHERE item_id = ?",
-        (item_id,)
-    ).fetchone()
-    conn.close()
-    return row[0] if row and row[0] else None
-
-
 def get_active_alerts() -> List[dict]:
-    """Latest undismissed alert per item (newest first), with a hit count."""
+    """Latest live alert per item (newest first), with a hit count."""
     conn = get_connection()
     rows = conn.execute(
         "SELECT a.item_id, a.item_name, a.buy, a.sell, a.net, a.qty, "
-        "       a.profit, a.roi, a.timestamp, c.n "
+        "       a.profit, a.roi, a.timestamp, a.traded_at, "
+        "       COALESCE(a.updated, a.timestamp) AS updated, c.n "
         "FROM profit_alerts a "
         "JOIN (SELECT item_id, MAX(id) AS mid, COUNT(*) AS n "
         "      FROM profit_alerts WHERE dismissed = 0 GROUP BY item_id) c "
         "  ON a.id = c.mid "
+        "WHERE a.expired = 0 "
         "ORDER BY a.timestamp DESC"
     ).fetchall()
     conn.close()

@@ -159,6 +159,8 @@ def _flip_summary(row: dict) -> dict:
         "hourly_volume_slower_side": row["volume"],
         "last_trade_age_seconds": row["age"], "verdict": row["verdict"],
         "signal": row["reversion"], "pct_vs_1h_avg": row["reversion_pct"],
+        "margin_at_5m_avg_prices": row["net_5m"],
+        "margin_backed_by_5m_avg": row["backed_5m"],
     }
 
 
@@ -167,7 +169,7 @@ class MarketTools:
 
     def __init__(self, get_mapping: Callable[[], list]):
         self._get_mapping = get_mapping
-        self._market = None        # (latest, bulk_1h, fetched_at)
+        self._market = None        # (latest, bulk_1h, fetched_at, bulk_5m)
         self._lock = threading.Lock()
 
     def run(self, name: str, args) -> dict:
@@ -210,7 +212,8 @@ class MarketTools:
             bulk = api.get_bulk_average("1h")
             if not latest or not bulk:
                 raise ToolError("Could not fetch live prices from the OSRS Wiki.")
-            self._market = (latest, bulk, time.time())
+            bulk_5m = api.get_bulk_average("5m")
+            self._market = (latest, bulk, time.time(), bulk_5m)
             return self._market
 
     # ── Tools ─────────────────────────────────────────────────────────────────
@@ -224,9 +227,10 @@ class MarketTools:
                 raise ToolError("capital must look like 10m, 500k or 1,000,000.")
         membership = _choice(args, "membership", MEMBERSHIPS, _user_membership())
 
-        latest, bulk, fetched_at = self._latest_market()
+        latest, bulk, fetched_at, bulk_5m = self._latest_market()
         rows = analyzer.find_flips(latest, bulk, self._mapping(),
-                                   capital=capital, membership=membership)
+                                   capital=capital, membership=membership,
+                                   bulk_5m=bulk_5m)
 
         verdict = _choice(args, "verdict", VERDICTS)
         if verdict:
@@ -266,10 +270,11 @@ class MarketTools:
         item = matches[0][1]
         item_id = item["id"]
 
-        latest, bulk, fetched_at = self._latest_market()
+        latest, bulk, fetched_at, bulk_5m = self._latest_market()
         lt = latest.get(str(item_id))
         row = (analyzer.flip_row(item, lt, bulk.get(str(item_id)),
-                                 _user_capital())
+                                 _user_capital(),
+                                 avg_5m=bulk_5m.get(str(item_id)))
                if lt else None)
 
         points = api.get_timeseries(item_id, timestep=HISTORY_STEP)
@@ -326,13 +331,14 @@ class MarketTools:
         watched = db.watchlist_items()
         watchlist = []
         if watched:
-            latest, bulk, _ = self._latest_market()
+            latest, bulk, _, bulk_5m = self._latest_market()
             by_id = {i["id"]: i for i in self._mapping()}
             for item_id, item_name, _added in watched:
                 lt = latest.get(str(item_id))
                 item = by_id.get(item_id)
                 row = (analyzer.flip_row(item, lt, bulk.get(str(item_id)),
-                                         capital)
+                                         capital,
+                                         avg_5m=bulk_5m.get(str(item_id)))
                        if lt and item else None)
                 watchlist.append(_flip_summary(row) if row
                                  else {"name": item_name, "verdict": "No price"})
@@ -346,7 +352,10 @@ class MarketTools:
                 "name": a["item_name"], "buy": a["buy"], "sell": a["sell"],
                 "margin_after_tax": a["net"], "qty": a["qty"],
                 "est_profit": a["profit"], "roi_pct": a["roi"],
-                "age_seconds": int(now - a["timestamp"]),
+                "alerted_seconds_ago": int(now - a["timestamp"]),
+                "prices_age_seconds": int(now - a["updated"]),
+                "last_trade_age_seconds": (int(now - a["traded_at"])
+                                           if a["traded_at"] else None),
             } for a in db.get_active_alerts()],
         }
 
