@@ -3,6 +3,19 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.0 — 2026-11-01
+
+**Changed**
+- Removed the Buy / Hold / Sell signal. Replayed over 100 days of real prices it
+  was backwards: BUY items did worse than average and SELL items did better.
+  Search now shows the facts instead: price move, volume and momentum. Help
+  explains why, and Ask AI no longer treats a recent move as a signal.
+
+**Fixed**
+- The chart's Refresh and Reset zoom buttons no longer get cut off or pushed off
+  the window.
+- Notes on Search now wrap instead of being cut off on narrower windows.
+
 ## 1.3.2 — 2026-11-01
 
 **Changed**

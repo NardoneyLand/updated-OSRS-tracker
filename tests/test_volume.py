@@ -331,7 +331,7 @@ def scenario():
         check(t[(1, 1)] == "480" and t[(2, 1)] == "360", "Search 1h buys and sells")
         check(t[(1, 2)] != "-" and t[(1, 3)] != "-", "Search fills in 12h and 24h without another search")
         labels = [w.cget("text") for w in app.result_frame.winfo_children()[1].winfo_children()[0].winfo_children() if isinstance(w, tk.Label) or w.winfo_class() == "TLabel"]
-        check("Volume" not in labels, "vague old Volume row is gone")
+        check("Volume" in labels and "Signal" not in labels and "Price move" in labels, f"Search rows: {labels}")
         shot("shot_vol_search.png")
 
         # FlipRec

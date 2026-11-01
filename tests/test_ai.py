@@ -61,7 +61,8 @@ assert "error" in tools.run("get_flips", {"capital": "lots"})
 assert len(fetches) == 1, "market should be cached between calls"
 r = tools.run("get_item", {"name": "whip"})
 assert r["name"] == "Abyssal whip" and r["flip"]["buy"] == 1_900_000 and r["history"]["pct_change_7d"] is not None, r
-assert r["signal"]["suggestion"] in ("BUY", "HOLD", "HOLD/SELL", "SELL")
+assert r["recent_market"]["direction"] in ("rising", "falling", "stable", "unknown")
+assert "BUY" not in str(r) and "suggestion" not in r["recent_market"]
 assert "error" in tools.run("get_item", {}) and "error" in tools.run("get_item", {"name": 5})
 assert "error" in tools.run("get_item", {"name": "zzzzqqqq"})
 assert "error" in tools.run("nope", {}) and "error" in tools.run("get_item", None)

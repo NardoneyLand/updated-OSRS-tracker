@@ -134,10 +134,10 @@ check(res["notice"] == ai.NOTICE_RETRIED, "#10 and the token count says it leave
 print("ai ok", flush=True)
 
 # ── #7 No history isn't "stable" ──
-p = analyzer.get_prediction(analyzer.calculate_trend([]), [])
-check(not any("stable" in r for r in p["reasons"]) and any("Not enough" in r for r in p["reasons"]), f"#7 {p['reasons']}")
-p = analyzer.get_prediction({"direction": "stable", "pct_change": 0}, [])
-check(any("stable" in r for r in p["reasons"]), "#7 a really stable price still says so")
+p = analyzer.read_market(analyzer.calculate_trend([]), [])
+check(any("Not enough" in r for r in p["notes"]), f"#7 {p['notes']}")
+p = analyzer.read_market({"direction": "stable", "pct_change": 0}, [])
+check(not any("Not enough" in r for r in p["notes"]), "#7 a stable price doesn't claim missing history")
 
 # ── #8 Damaged saved data ──
 now = int(time.time())

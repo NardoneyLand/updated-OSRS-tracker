@@ -71,8 +71,12 @@ an extreme move, or a margin the last 5 minutes' average prices don't back up, s
 the margin may not be real. Inactive means a side has not traded for an hour.
 - last_trade_age_seconds is how long ago the older side traded. Over 5 minutes, \
 treat the margin as possibly out of date and say so.
-- The Buy / Hold / Sell signal is a simple score from recent price direction, \
-volume and momentum, not a forecast.
+- recent_market gives facts, not advice. Replayed over 100 days of real prices, \
+buying because a price was rising did worse than average, and selling because it \
+was falling gave up gains, because prices tend to partly reverse. Those reversals \
+are usually smaller than the 2% tax, so a falling price isn't a reason to buy \
+either. Don't treat a recent move as a signal. Base suggestions on after-tax \
+margins, volume and how recently an item traded.
 
 Give specific suggestions with the numbers behind them, and say when the data is \
 thin or a margin looks unreliable. Offers can take time to fill and margins can \

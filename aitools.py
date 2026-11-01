@@ -68,7 +68,7 @@ TOOLS = [
             "Full details for one item: live prices, flip stats, buy limit, "
             "units traded in the last 1, 12 and 24 hours (null means that "
             "data hasn't loaded yet, not zero trades), price changes over 24 "
-            "hours and 7 days, and the app's Buy / Hold / Sell signal. Accepts "
+            "hours and 7 days, and facts about its recent trading. Accepts "
             "an approximate name."),
         "schema": {
             "type": "object",
@@ -299,7 +299,7 @@ class MarketTools:
         rows = [(p.get("avgHighPrice"), p.get("avgLowPrice"), p.get("timestamp"))
                 for p in reversed(points[-30:])]
         live = (lt.get("high"), lt.get("low")) if lt else None
-        _trend, prediction = analyzer.price_signal(
+        trend, facts = analyzer.recent_market(
             api.get_timeseries(item_id, timestep="5m"), rows, points, live=live)
 
         return {
@@ -312,12 +312,15 @@ class MarketTools:
             "flip": _flip_summary(row) if row else None,
             "history": _history_summary(points),
             "units_traded": self._traded(item_id),
-            "signal": {
-                "suggestion": prediction["suggestion"],
-                "confidence": prediction["confidence"],
-                "reasons": prediction["reasons"],
-                "volume": prediction["vol_label"],
-                "momentum": prediction["momentum"],
+            "recent_market": {
+                "price_move_pct": trend["pct_change"],
+                "over_hours": trend["hours"],
+                "direction": trend["direction"],
+                "volume_vs_usual": facts["volume"],
+                "last_hour_volume": facts["recent_volume"],
+                "usual_hourly_volume": facts["usual_volume"],
+                "momentum": facts["momentum"],
+                "notes": facts["notes"],
             },
             "other_close_matches": [m[1]["name"] for m in matches[1:]],
         }

@@ -1,5 +1,5 @@
 """
-analyzer.py — Trend analysis, flip/profit maths, and buy/hold prediction.
+analyzer.py — Trend analysis, market facts, and flip/profit maths.
 """
 
 from typing import List, Optional, Tuple
@@ -16,7 +16,7 @@ def calculate_trend(history: List[Tuple]) -> dict:
         return {
             "direction": "unknown", "strength": 0,
             "avg_high": 0, "avg_low": 0, "pct_change": 0,
-            "data_points": len(history),
+            "data_points": len(history), "hours": 0,
         }
 
     valid = [(h, l, ts) for h, l, ts in history if h and l]
@@ -24,7 +24,7 @@ def calculate_trend(history: List[Tuple]) -> dict:
         return {
             "direction": "unknown", "strength": 0,
             "avg_high": 0, "avg_low": 0, "pct_change": 0,
-            "data_points": 0,
+            "data_points": 0, "hours": 0,
         }
 
     mids = [(h + l) / 2 for h, l, _ in valid]
@@ -40,6 +40,7 @@ def calculate_trend(history: List[Tuple]) -> dict:
 
     avg_high = sum(h for h, _, _ in valid) / len(valid)
     avg_low  = sum(l for _, l, _ in valid) / len(valid)
+    stamps = [ts for _, _, ts in valid if ts]
 
     return {
         "direction":   direction,
@@ -48,141 +49,63 @@ def calculate_trend(history: List[Tuple]) -> dict:
         "avg_low":     int(avg_low),
         "pct_change":  round(pct, 2),
         "data_points": len(valid),
+        "hours": round((max(stamps) - min(stamps)) / 3600) if stamps else 0,
     }
 
 
-# ── Alert ─────────────────────────────────────────────────────────────────────
+# ── Recent market facts ───────────────────────────────────────────────────────
 
-# ── Prediction ────────────────────────────────────────────────────────────────
+MARKET_HOURS = 30             # how far back to look
+MARKET_MIN_PRICED_HOURS = 6   # fewer than this is too thin to use
 
-def get_prediction(trend: dict, timeseries: list) -> dict:
+
+def read_market(trend: dict, points: list) -> dict:
     """
-    Generate a BUY / HOLD / SELL suggestion from trend + volume data.
+    Plain facts about an item's recent trading, from a trend summary and its
+    hourly points (oldest first).
 
-    Scoring rubric  (range −3 … +3):
-      +1 / −1  price direction (rising / falling)
-      +1 / −1  volume confirms or contradicts direction
-      +1 / −1  momentum (recent change accelerating)
-      Penalty  extreme moves (possible manipulation)
+    This deliberately gives no Buy / Sell verdict. An earlier score that treated
+    rising prices as a reason to buy did worse than picking at random: replayed
+    over 100 days, BUY items lagged and SELL items beat the market, because
+    prices tend to partly reverse. See tests/backtest.py before adding one back.
     """
-    direction  = trend.get("direction", "unknown")
-    pct_change = trend.get("pct_change", 0.0)
+    pct = trend.get("pct_change", 0.0)
+    direction = trend.get("direction", "unknown")
+    volumes = [(p.get("highPriceVolume") or 0) + (p.get("lowPriceVolume") or 0)
+               for p in points]
+    prices = [(p["avgHighPrice"] + p["avgLowPrice"]) / 2 for p in points
+              if p.get("avgHighPrice") and p.get("avgLowPrice")]
 
-    # ── Volume from timeseries ────────────────────────────────────────────────
-    vols: List[int] = []
-    prices: List[float] = []
+    avg_volume = sum(volumes) / len(volumes) if volumes else 0
+    recent_volume = volumes[-1] if volumes else 0
+    volume = "unknown"
+    if avg_volume > 0:
+        ratio = recent_volume / avg_volume
+        volume = "high" if ratio >= 1.3 else "low" if ratio <= 0.7 else "normal"
 
-    for pt in timeseries:
-        hv = pt.get("highPriceVolume") or 0
-        lv = pt.get("lowPriceVolume") or 0
-        vols.append(hv + lv)
-
-        hp = pt.get("avgHighPrice") or 0
-        lp = pt.get("avgLowPrice") or 0
-        if hp and lp:
-            prices.append((hp + lp) / 2)
-
-    avg_vol    = sum(vols) / len(vols) if vols else 0
-    recent_vol = vols[-1] if vols else 0
-
-    if avg_vol > 0:
-        vol_ratio = recent_vol / avg_vol
-        if vol_ratio >= 1.3:
-            vol_label = "high"
-        elif vol_ratio <= 0.7:
-            vol_label = "low"
-        else:
-            vol_label = "normal"
-    else:
-        vol_label = "unknown"
-
-    # ── Momentum (compare last quarter vs first quarter of timeseries) ────────
+    # Prices in the later half of the period against the earlier half.
     momentum = "flat"
     if len(prices) >= 4:
         half = len(prices) // 2
-        early_avg = sum(prices[:half]) / half
-        late_avg  = sum(prices[half:]) / (len(prices) - half)
-        mom_pct   = ((late_avg - early_avg) / early_avg * 100) if early_avg else 0
-        if mom_pct > 2:
-            momentum = "accelerating"
-        elif mom_pct < -2:
-            momentum = "decelerating"
+        early = sum(prices[:half]) / half
+        late = sum(prices[half:]) / (len(prices) - half)
+        change = (late - early) / early * 100 if early else 0
+        momentum = "rising" if change > 2 else "falling" if change < -2 else "flat"
 
-    # ── Score ─────────────────────────────────────────────────────────────────
-    score = 0
-    reasons: List[str] = []
+    notes = []
+    if abs(pct) > 25:
+        notes.append(f"⚠ Extreme price swing ({pct:+.1f}%). This could be "
+                     "manipulation, so be careful.")
+    if direction == "unknown":
+        notes.append("Not enough price history to judge the move.")
+    elif direction != "stable":
+        notes.append("Big moves often partly reverse, but usually by less than "
+                     "the 2% GE tax.")
+    if volume == "low":
+        notes.append("Trading is quiet right now, so this move means less.")
 
-    # Price direction
-    if direction == "rising":
-        score += 1
-        reasons.append(f"Price is trending upward ({pct_change:+.1f}% vs history)")
-    elif direction == "falling":
-        score -= 1
-        reasons.append(f"Price is trending downward ({pct_change:+.1f}% vs history)")
-    elif direction == "stable":
-        reasons.append("Price is relatively stable in recent history")
-    else:
-        reasons.append("Not enough price history to judge the trend")
-
-    # Volume
-    if vol_label == "high":
-        if direction == "rising":
-            score += 1
-            reasons.append("High volume confirms the upward move")
-        elif direction == "falling":
-            score -= 1
-            reasons.append("High volume confirms the downward move")
-        else:
-            reasons.append("Volume is elevated but price is stable")
-    elif vol_label == "low":
-        reasons.append("Low trading volume — trend signal is weak")
-    elif vol_label == "normal":
-        reasons.append("Volume is within normal range")
-
-    # Momentum
-    if momentum == "accelerating":
-        score += 1
-        reasons.append("Momentum is accelerating — move may continue")
-    elif momentum == "decelerating":
-        score -= 1
-        reasons.append("Momentum is slowing — reversal possible")
-
-    # Manipulation guard
-    if abs(pct_change) > 25:
-        reasons.append(
-            f"⚠ Extreme price swing ({pct_change:+.1f}%) — "
-            "possible market manipulation, trade with caution"
-        )
-        score = max(-1, min(score, 1))  # clamp near neutral
-
-    # ── Map score to label ────────────────────────────────────────────────────
-    if score >= 2:
-        suggestion, confidence = "BUY",       "High"
-    elif score == 1:
-        suggestion, confidence = "BUY",       "Moderate"
-    elif score == 0:
-        suggestion, confidence = "HOLD",      "Neutral"
-    elif score == -1:
-        suggestion, confidence = "HOLD/SELL", "Moderate"
-    else:
-        suggestion, confidence = "SELL",      "High"
-
-    return {
-        "suggestion":  suggestion,
-        "confidence":  confidence,
-        "score":       score,
-        "reasons":     reasons,
-        "vol_label":   vol_label,
-        "avg_volume":  int(avg_vol),
-        "recent_vol":  int(recent_vol),
-        "momentum":    momentum,
-    }
-
-
-# ── Fresh inputs for the prediction ──────────────────────────────────────────
-
-SIGNAL_HOURS = 30             # how far back the signal looks
-SIGNAL_MIN_PRICED_HOURS = 6   # fewer than this is too thin to use
+    return {"volume": volume, "recent_volume": int(recent_volume),
+            "usual_volume": int(avg_volume), "momentum": momentum, "notes": notes}
 
 
 def rolling_hours(points_5m: list, now: Optional[float] = None) -> List[dict]:
@@ -195,8 +118,8 @@ def rolling_hours(points_5m: list, now: Optional[float] = None) -> List[dict]:
     import time as _time
     now = int(now if now is not None else _time.time())
     end = now - now % 300
-    start = end - SIGNAL_HOURS * 3600
-    hours = [[0, 0, 0, 0] for _ in range(SIGNAL_HOURS)]
+    start = end - MARKET_HOURS * 3600
+    hours = [[0, 0, 0, 0] for _ in range(MARKET_HOURS)]
     for point in points_5m:
         stamp = point.get("timestamp") or 0
         if not start <= stamp < end:
@@ -219,25 +142,27 @@ def rolling_hours(points_5m: list, now: Optional[float] = None) -> List[dict]:
     } for index, t in enumerate(hours)]
 
 
-def price_signal(points_5m: list, fallback_rows: List[Tuple],
-                 fallback_points: list, live: Optional[Tuple[int, int]] = None,
-                 now: Optional[float] = None) -> Tuple[dict, dict]:
+def recent_market(points_5m: list, fallback_rows: List[Tuple],
+                  fallback_points: list, live: Optional[Tuple[int, int]] = None,
+                  now: Optional[float] = None) -> Tuple[dict, dict]:
     """
-    (trend, prediction) for an item, from rolling hours where it trades enough.
-    For a thinly traded item, or if the 5-minute history is unavailable, uses
-    the fallback: price rows newest first, and 1-hour points oldest first.
+    (trend, facts) for an item, from rolling hours where it trades enough. For a
+    thinly traded item, or if the 5-minute history is unavailable, uses the
+    fallback: price rows newest first, and 1-hour points oldest first.
     """
+    import time as _time
+    now = now if now is not None else _time.time()
     hours = rolling_hours(points_5m, now)
     rows = [(p["avgHighPrice"], p["avgLowPrice"], p["timestamp"])
             for p in reversed(hours)
             if p["avgHighPrice"] and p["avgLowPrice"]]
-    if len(rows) < SIGNAL_MIN_PRICED_HOURS:
+    if len(rows) < MARKET_MIN_PRICED_HOURS:
         trend = calculate_trend(fallback_rows)
-        return trend, get_prediction(trend, fallback_points)
+        return trend, read_market(trend, fallback_points)
     if live and live[0] and live[1]:
         rows = [(live[0], live[1], now)] + rows
-    trend = calculate_trend(rows[:SIGNAL_HOURS])
-    return trend, get_prediction(trend, hours)
+    trend = calculate_trend(rows[:MARKET_HOURS])
+    return trend, read_market(trend, hours)
 
 
 # ── Volatility scanner ────────────────────────────────────────────────────────

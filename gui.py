@@ -148,21 +148,22 @@ def fmt_last_trade(traded_at, now=None) -> str:
     return ("⏱ " if age > analyzer.FLIP_SLOW_AGE else "") + fmt_age(max(age, 0))
 
 
-def trend_arrow(direction: str) -> tuple:
-    return {
-        "rising":  ("↑", COLOR_GREEN),
-        "falling": ("↓", COLOR_RED),
-        "stable":  ("→", COLOR_YELLOW),
-        "unknown": ("?", COLOR_DIM),
-    }.get(direction, ("?", COLOR_DIM))
+def fmt_price_move(trend: dict) -> str:
+    """'Down 5.2% over 30 hours'. Plain text: a move isn't good or bad."""
+    pct = trend["pct_change"]
+    if trend["direction"] == "unknown":
+        return "Not enough history"
+    move = {"rising": f"Up {abs(pct):.1f}%", "falling": f"Down {abs(pct):.1f}%"
+            }.get(trend["direction"], f"Steady ({pct:+.1f}%)")
+    return f"{move} over {trend['hours']} hours" if trend["hours"] else move
 
 
-def signal_color(sugg: str) -> str:
-    if "BUY" in sugg:
-        return COLOR_GREEN
-    if "SELL" in sugg:
-        return COLOR_RED
-    return COLOR_YELLOW
+def fmt_volume_pace(facts: dict) -> str:
+    if facts["volume"] == "unknown":
+        return "Unknown"
+    return (f"{facts['volume'].capitalize()} for this item  "
+            f"({fmt_gp(facts['recent_volume'])} last hour, "
+            f"usually {fmt_gp(facts['usual_volume'])})")
 
 
 # ── Taskbar flash ─────────────────────────────────────────────────────────────
@@ -380,12 +381,12 @@ HELP_SECTIONS = [
      "    •  Last trade — how long ago the older side last traded, and each "
      "side separately. ⏱ means over 5 minutes, so the prices may have "
      "moved.\n"
-     "    •  Trend — direction over the last 30 hours or so of prices, "
-     "counted back from now.\n"
-     "    •  Signal — BUY, HOLD or SELL (see below).\n"
+     "    •  Price move — how far the price has moved over the last 30 hours "
+     "or so, counted back from now.\n"
      "    •  Volume — units traded in the last 1, 12 and 24 hours, split "
      "into instant buys and instant sells.\n"
-     "    •  Momentum — whether the move is speeding up or slowing.\n\n"
+     "    •  Momentum — whether prices in the later half of that time are "
+     "higher or lower than in the earlier half.\n\n"
      "Click ☆ Add to Watchlist to follow the item on the Watchlist tab.\n\n"
      "Below the result is the item's price chart (high, low and mid). "
      "Choose a range: 1H, 12H, 1D, 1W, 1M, 1Y or All. The history comes "
@@ -398,15 +399,14 @@ HELP_SECTIONS = [
      "rescales to what's in view. Double-click the chart or press Reset "
      "zoom to see the whole range again."),
 
-    ("BUY / HOLD / SELL — what they mean",
-     "The Search signal is a rule of thumb, not financial advice. It "
-     "scores from −3 to +3:\n\n"
-     "    +1 / −1   for price direction (rising / falling)\n"
-     "    +1 / −1   for volume confirming that direction\n"
-     "    +1 / −1   for momentum (speeding up / slowing)\n\n"
-     "Score ≥ 2 → BUY (high), 1 → BUY (moderate), 0 → HOLD, "
-     "−1 → HOLD/SELL, ≤ −2 → SELL. Moves over ±25% trigger a "
-     "manipulation guard that pulls the signal toward neutral."),
+    ("Why there's no Buy or Sell signal",
+     "Search shows facts rather than a verdict. The app used to score items "
+     "as BUY, HOLD or SELL, treating a rising price as a reason to buy. "
+     "Replayed over 100 days of real prices, that was backwards: BUY items "
+     "did worse than average and SELL items did better.\n\n"
+     "Prices often partly reverse after a big move, but usually by less than "
+     "the 2% GE tax, so simply doing the opposite doesn't reliably make money "
+     "either. Use the margins on FlipRec for flipping decisions."),
 
     ("Ask AI — suggestions from your own AI account",
      "Ask questions in plain English, such as \"What should I flip with "
@@ -933,7 +933,7 @@ class OSRSTrackerApp:
         ttk.Label(range_bar, text="Chart range:", style="TLabel").pack(
             side="left", padx=(0, 8))
         for label, _secs, _step in HISTORY_RANGES:
-            btn = ttk.Button(range_bar, text=label, style="Range.TButton",
+            btn = ttk.Button(range_bar, text=label, style="Range.TButton", width=4,
                              command=lambda l=label: self._set_history_range(l))
             btn.pack(side="left", padx=(0, 4))
             self.history_range_btns[label] = btn
@@ -1082,14 +1082,14 @@ class OSRSTrackerApp:
             db.backfill_price_history(item_id, item_name, ts_data,
                                     TIMESERIES_STEP)
 
-            trend, prediction = analyzer.price_signal(
+            trend, facts = analyzer.recent_market(
                 api.get_timeseries(item_id, timestep="5m"),
                 db.get_price_history(item_id, limit=30), ts_data,
                 live=(high, low))
 
             return {
                 "item": item, "price_data": price_data,
-                "trend": trend, "prediction": prediction,
+                "trend": trend, "facts": facts,
             }
 
         def done(payload, err):
@@ -1115,7 +1115,7 @@ class OSRSTrackerApp:
                   style="Panel.TLabel", justify="center"
                   ).pack(expand=True, pady=20)
 
-    def _render_result(self, item, price_data, trend, prediction):
+    def _render_result(self, item, price_data, trend, facts):
         for child in self.result_frame.winfo_children():
             child.destroy()
 
@@ -1124,10 +1124,6 @@ class OSRSTrackerApp:
         low = price_data.get("low") or high
         spread = high - low
         spread_pct = (spread / low * 100) if low else 0
-
-        arrow, tcolor = trend_arrow(trend["direction"])
-        sugg = prediction["suggestion"]
-        sc = signal_color(sugg)
 
         # Header
         header = ttk.Frame(self.result_frame, style="Inner.TFrame")
@@ -1150,15 +1146,10 @@ class OSRSTrackerApp:
             ("Low sell", f"{fmt_gp(low)} gp", COLOR_RED),
             ("Spread",   f"{fmt_gp(spread)} gp  ({spread_pct:.1f}%)", COLOR_TEXT),
             ("Last trade", "", COLOR_TEXT),
-            ("Trend",
-             f"{arrow}  {trend['direction'].capitalize()}  "
-             f"({trend['pct_change']:+.1f}%)  "
-             f"over {trend['data_points']} hourly prices",
-             tcolor),
-            ("Signal",
-             f"{sugg}  ({prediction['confidence']} confidence)",
-             sc),
-            ("Momentum", prediction["momentum"].capitalize(), COLOR_TEXT),
+            ("Price move", fmt_price_move(trend), COLOR_TEXT),
+            ("Volume", fmt_volume_pace(facts), COLOR_TEXT),
+            ("Momentum", {"rising": "Rising lately", "falling": "Falling lately"
+                          }.get(facts["momentum"], "Flat"), COLOR_TEXT),
         ]
 
         for i, (label, value, color) in enumerate(rows):
@@ -1180,17 +1171,17 @@ class OSRSTrackerApp:
         self._search_volume = (volume_frame, item["id"], {})
         self._render_search_volume()
 
-        # Reasons
-        if prediction["reasons"]:
+        # Notes
+        if facts["notes"]:
             reasons_frame = ttk.Frame(right, style="Inner.TFrame")
             reasons_frame.pack(anchor="w", fill="x")
-            ttk.Label(reasons_frame, text="Analysis:",
+            ttk.Label(reasons_frame, text="Worth knowing:",
                       style="PanelHeader.TLabel"
                       ).pack(anchor="w")
-            for r in prediction["reasons"]:
+            for r in facts["notes"]:
                 ttk.Label(reasons_frame, text=f"  •  {r}",
                           style="Panel.TLabel",
-                          wraplength=520, justify="left"
+                          wraplength=330, justify="left"
                           ).pack(anchor="w")
 
     def _render_search_volume(self):
@@ -1983,15 +1974,15 @@ class OSRSTrackerApp:
 
     FLIP_COLUMNS = [
         # (tree id, header, data key, width, anchor, default desc)
-        ("item",    "Item",        "name",      160, "w",      False),
-        ("buy",     "Buy (gp)",    "buy",       80,  "e",      False),
-        ("sell",    "Sell (gp)",   "sell",      80,  "e",      True),
-        ("tax",     "GE tax",      "tax",       65,  "e",      True),
+        ("item",    "Item",        "name",      184, "w",      False),
+        ("buy",     "Buy (gp)",    "buy",       74,  "e",      False),
+        ("sell",    "Sell (gp)",   "sell",      74,  "e",      True),
+        ("tax",     "GE tax",      "tax",       60,  "e",      True),
         ("net",     "Net / item",  "net",       85,  "e",      True),
-        ("roi",     "ROI",         "roi",       55,  "e",      True),
+        ("roi",     "ROI",         "roi",       50,  "e",      True),
         ("limit",   "4h limit",    "limit",     72,  "e",      True),
         ("qty",     "Qty",         "qty",       55,  "e",      True),
-        ("profit",  "Est. profit", "profit",    90,  "e",      True),
+        ("profit",  "Est. profit", "profit",    88,  "e",      True),
         ("volume",  "Vol 1h",      "volume",    75,  "e",      True),
         ("age",     "Last trade",  "age",       88,  "e",      False),
         ("verdict", "Verdict",     "verdict",   80,  "center", True),

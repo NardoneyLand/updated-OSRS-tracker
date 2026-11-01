@@ -14,7 +14,7 @@ Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** �
 - **Profit alerts** — checks the market every 1, 5, 15 or 30 minutes (1 by default) and alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and taskbar flash. Alerts keep updating with live prices and disappear once the flip stops qualifying.
 - **Watchlist** — add items from Search and follow their live margins.
 - **Volatile scanner** — the biggest movers across the whole GE over 5m / 1h / 6h / 24h.
-- **Item search + price chart** — autocomplete lookup with a Buy / Hold / Sell signal from price, volume and momentum, plus the item's price chart (1H to 1 year, backed by the OSRS Wiki's history) on the same page.
+- **Item search + price chart** — autocomplete lookup with the item's recent price move, volume and momentum, plus the item's price chart (1H to 1 year, backed by the OSRS Wiki's history) on the same page.
 - **Ask AI** — ask an AI for suggestions using your own API key from Anthropic, OpenAI, OpenRouter, or any service with an OpenAI-compatible API. The AI can look up live flips, big movers, item history, your Watchlist, your alerts and the news, but it can't change anything or place trades.
 - **Live news** — the official OSRS news feed, loaded on launch.
 - **In-app Help tab** — explains every tab, the verdicts and the GE tax.
@@ -129,7 +129,7 @@ gui.py              Tkinter app — entry point
 api.py              OSRS Wiki Prices API wrapper
 db.py               SQLite layer (price history, alerts, news cache)
 search.py           Fuzzy item search
-analyzer.py         Trend, alert, prediction, volatility logic
+analyzer.py         Trend, market facts, flip and volatility logic
 ai.py               Ask AI: API keys and the chat loops for each kind of API
 aitools.py          Ask AI: the read-only data lookups the AI can call
 volume.py           Rolling 1h / 12h / 24h volumes built from the Wiki's bulk data
@@ -145,7 +145,8 @@ find-python.ps1     shared Python 3.10+ discovery (used by the .ps1 scripts)
 release.sh          build + .zip + .dmg + (optional) GitHub publish (macOS)
 make_icns.sh        Convert icon source to .icns (macOS)
 requirements.txt    Python deps
-tests/              Tests: python tests/run_all.py (opens real app windows)
+tests/              Tests: python tests/run_all.py (windows stay on a hidden desktop)
+tests/backtest.py   Replays a Buy/Sell rule over real history. Run it before adding one.
 ```
 
 ---
