@@ -11,6 +11,7 @@ Build a Mac .app bundle:
 import bisect
 import ctypes
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -62,7 +63,8 @@ HISTORY_RANGES = [
 ]
 HISTORY_DEFAULT_RANGE = "1W"
 PRICE_FORMATS = ["Short (1.2K)", "Exact (1,240)"]
-STEP_SECONDS = {"5m": 300, "1h": 3600, "6h": 6 * 3600, "24h": 86400}
+STEP_SECONDS = api.STEP_SECONDS
+UI_QUEUE_POLL_MS = 50             # how often the window picks up finished work
 CHART_MIN_POINTS = 4              # zooming stops at about this many points
 FLIP_MAX_ROWS = 300
 AI_MODEL_LIST_MARGIN = 40         # px for the list's scrollbar and padding
@@ -185,7 +187,32 @@ def flash_window(root: tk.Tk):
 
 # ── Threading helper ──────────────────────────────────────────────────────────
 
-def run_async(root: tk.Tk, target, on_done):
+# Background threads must never call Tk, even root.after: each thread that does
+# leaves a Windows handle and about 17 KB behind for good, which adds up with a
+# new thread on every market check. They queue the call for the window instead.
+_ui_calls = queue.SimpleQueue()
+
+
+def ui_call(fn, *args) -> None:
+    """Run fn(*args) on the window's thread. Safe from any thread."""
+    _ui_calls.put((fn, args))
+
+
+def run_ui_queue(root: tk.Tk) -> None:
+    # Rescheduled first, so a callback that opens a dialog can't stall the rest.
+    root.after(UI_QUEUE_POLL_MS, run_ui_queue, root)
+    while True:
+        try:
+            fn, args = _ui_calls.get_nowait()
+        except queue.Empty:
+            return
+        try:
+            fn(*args)
+        except Exception:
+            root.report_callback_exception(*sys.exc_info())
+
+
+def run_async(target, on_done):
     def worker():
         try:
             result = target()
@@ -194,7 +221,7 @@ def run_async(root: tk.Tk, target, on_done):
             applog.log.warning(f"Background task {target.__name__} failed",
                                exc_info=True)
             result, err = None, e
-        root.after(0, lambda: on_done(result, err))
+        ui_call(on_done, result, err)
     threading.Thread(target=worker, daemon=True).start()
 
 
@@ -424,8 +451,9 @@ HELP_SECTIONS = [
      "The OSRS Wiki updates prices from the game about every 60 "
      "seconds. Volumes are true rolling windows, built from the Wiki's "
      "5-minute and hourly data. The first launch downloads a day of it in "
-     "the background (under a minute), and until then the 12h and 24h "
-     "numbers and the ▲▼ arrows stay blank. FlipRec fetches when you open it or click Refresh; Alerts "
+     "the background (about a minute), and until then the 12h and 24h "
+     "numbers and the ▲▼ arrows stay blank. A * on a volume means the Wiki "
+     "is missing part of that period, so it may read slightly low. FlipRec fetches when you open it or click Refresh; Alerts "
      "and Watchlist update on the timer you choose on Alerts (every minute "
      "by default); Search is live each time. "
      "Last trade (FlipRec, Alerts, Watchlist, Search) shows exactly how "
@@ -484,9 +512,10 @@ class OSRSTrackerApp:
         self._monitor_job = None       # the pending timer for the next check
         self._trade_ages = {}          # tree -> {row id: traded_at}
         self._volume = volume.VolumeHistory(
-            lambda: self.root.after(0, self._on_volume_changed))
+            lambda: ui_call(self._on_volume_changed))
         self._volume_ready = frozenset()
-        self._search_volume = None     # (frame, item_id) showing the table
+        self._volume_loaded = False    # the first download has finished
+        self._search_volume = None     # (frame, item_id, cells) showing the table
         self._search_trade = None      # (label, high time, low time)
         self._search_item = None       # item shown in the Search panel
         self._lookup_seq = 0           # latest Search lookup (see _lookup_item)
@@ -505,6 +534,7 @@ class OSRSTrackerApp:
             self.root.destroy()
             return
         self.ready = True
+        run_ui_queue(self.root)
         self.root.after(TRADE_AGE_TICK_MS, self._tick_trade_ages)
         self._volume.start()
         self._load_mapping_async()
@@ -825,7 +855,7 @@ class OSRSTrackerApp:
                 self._monitor_started = True
                 self._monitor_tick()
 
-        run_async(self.root, api.get_mapping, done)
+        run_async(api.get_mapping, done)
 
     # ── Search tab (with autocomplete) ────────────────────────────────────────
 
@@ -1074,7 +1104,7 @@ class OSRSTrackerApp:
                 return
             self._render_result(**payload)
 
-        run_async(self.root, fetch, done)
+        run_async(fetch, done)
 
     def _render_message(self, text: str):
         for child in self.result_frame.winfo_children():
@@ -1145,7 +1175,7 @@ class OSRSTrackerApp:
 
         volume_frame = ttk.Frame(right, style="Inner.TFrame")
         volume_frame.pack(anchor="w", pady=(0, 10))
-        self._search_volume = (volume_frame, item["id"])
+        self._search_volume = (volume_frame, item["id"], {})
         self._render_search_volume()
 
         # Reasons
@@ -1162,39 +1192,63 @@ class OSRSTrackerApp:
                           ).pack(anchor="w")
 
     def _render_search_volume(self):
-        """The units-traded table on the Search panel."""
+        """The units-traded table on the Search panel. Widgets are reused:
+        Tk never frees a widget's name, so rebuilding it forever would leak."""
         if not self._search_volume or not self._search_volume[0].winfo_exists():
             return
-        frame, item_id = self._search_volume
-        for child in frame.winfo_children():
-            child.destroy()
-        ttk.Label(frame, text="Volume", style="PanelHeader.TLabel"
-                  ).grid(row=0, column=0, sticky="w", padx=(0, 18))
-        windows = (("1h", 3600), ("12h", 12 * 3600), ("24h", 24 * 3600))
-        for col, (label, _s) in enumerate(windows, start=1):
-            ttk.Label(frame, text=label, style="PanelHeader.TLabel"
-                      ).grid(row=0, column=col, sticky="e", padx=(16, 0))
-        for side, row_label in enumerate(("Instant buys", "Instant sells")):
-            ttk.Label(frame, text=row_label, style="Stat.TLabel"
-                      ).grid(row=side + 1, column=0, sticky="w", padx=(0, 18),
-                             pady=1)
-            for col, (_l, seconds) in enumerate(windows, start=1):
+        frame, item_id, cells = self._search_volume
+        if not cells:
+            ttk.Label(frame, text="Volume", style="PanelHeader.TLabel"
+                      ).grid(row=0, column=0, sticky="w", padx=(0, 18))
+            for col, (label, _s) in enumerate(volume.WINDOWS, start=1):
+                ttk.Label(frame, text=label, style="PanelHeader.TLabel"
+                          ).grid(row=0, column=col, sticky="e", padx=(16, 0))
+            for side, label in enumerate(("Instant buys", "Instant sells")):
+                ttk.Label(frame, text=label, style="Stat.TLabel"
+                          ).grid(row=side + 1, column=0, sticky="w",
+                                 padx=(0, 18), pady=1)
+                for col, (_l, seconds) in enumerate(volume.WINDOWS, start=1):
+                    cells[side, seconds] = tk.Label(frame, bg=COLOR_PANEL,
+                                                    font=FONT_VALUE)
+                    cells[side, seconds].grid(row=side + 1, column=col,
+                                              sticky="e", padx=(16, 0), pady=1)
+            cells["note"] = ttk.Label(frame, style="Panel.TLabel", wraplength=420,
+                                      justify="left", foreground=COLOR_DIM)
+            cells["note"].grid(row=3, column=0, columnspan=4, sticky="w")
+        for key, cell in cells.items():
+            if key != "note":
+                side, seconds = key
                 sides = self._volume.sides(item_id, seconds)
-                tk.Label(frame, text=fmt_gp(sides[side]) if sides else "-",
-                         bg=COLOR_PANEL, font=FONT_VALUE,
-                         fg=COLOR_TEXT if sides else COLOR_DIM
-                         ).grid(row=side + 1, column=col, sticky="e",
-                                padx=(16, 0), pady=1)
+                cell.config(
+                    text=(self._window_text(sides[side], seconds, fmt_gp)
+                          if sides else "-"),
+                    fg=COLOR_TEXT if sides else COLOR_DIM)
+        cells["note"].config(text=self._volume_note(
+            [seconds for _l, seconds in volume.WINDOWS]))
+
+    def _window_text(self, value, seconds: int, fmt) -> str:
+        """A window's number: * if the Wiki is missing part of that window."""
+        if value is None:
+            return "-"
+        return fmt(value) + ("*" if self._volume.is_partial(seconds) else "")
+
+    def _volume_note(self, windows) -> str:
+        """The explanation for any * being shown, otherwise nothing."""
+        if any(self._volume.is_partial(seconds) for seconds in windows):
+            return ("* Some Wiki data is missing for this period, so this may "
+                    "read slightly low.")
+        return ""
 
     def _on_volume_changed(self):
         """A new period of volume history arrived."""
         ready = self._volume.ready_windows()
-        if self.item_data:
-            if 24 * 3600 not in ready:
+        if self.item_data and not self._volume_loaded:
+            if 24 * 3600 in ready:
+                self._volume_loaded = True
+                self.status_var.set(f"{len(self.item_data):,} items loaded.")
+            else:
                 have, wanted = self._volume.progress()
                 self.status_var.set(f"Loading volume history… {have}/{wanted}")
-            elif 24 * 3600 not in self._volume_ready:
-                self.status_var.set(f"{len(self.item_data):,} items loaded.")
         self._render_search_volume()
         if ready != self._volume_ready:
             # New columns can fill in. Otherwise the tables update on the
@@ -1206,16 +1260,17 @@ class OSRSTrackerApp:
                 self._render_fliprec_table()
 
     def _volume_text(self, item_id, volume_1h, fmt) -> str:
-        """The Vol 1h cell: the amount, with an arrow if it's unusual."""
+        """The Vol 1h cell: the amount, with an arrow if it's unusual. No saved
+        amount (an alert from before this column existed) isn't zero."""
+        if volume_1h is None:
+            return "-"
         pace = analyzer.volume_pace(
-            volume_1h or 0, self._volume.slower_side(item_id, 24 * 3600))
-        return f"{fmt(volume_1h or 0)} {pace}".rstrip()
+            volume_1h, self._volume.slower_side(item_id, 24 * 3600))
+        return f"{self._window_text(volume_1h, 3600, fmt)} {pace}".rstrip()
 
     def _hour_and_5m_averages(self) -> tuple:
-        """Averages for pricing flips. Rolling data if it's ready; otherwise
-        (for a moment at first launch) the Wiki's newest full periods."""
-        return (self._volume.view(3600) or api.get_bulk_average("1h"),
-                self._volume.view(300) or api.get_bulk_average("5m"))
+        """Averages for pricing flips (see VolumeHistory.averages)."""
+        return self._volume.averages("1h"), self._volume.averages("5m")
 
     def _show_search_trade(self):
         label, high_time, low_time = self._search_trade
@@ -1411,11 +1466,11 @@ class OSRSTrackerApp:
             stamp = time.strftime("%H:%M:%S", time.localtime(self._market[2]))
             self.alerts_status.set(
                 f"Prices updated {stamp} · {new} new · {expired} expired · "
-                f"{next_check}")
+                f"{next_check}   {self._volume_note([3600])}".rstrip())
             if new:
                 flash_window(self.root)
 
-        run_async(self.root, task, done)
+        run_async(task, done)
 
     def _evaluate_alerts(self) -> tuple:
         """Match the alerts to the last market snapshot. Returns (new, expired)."""
@@ -1546,6 +1601,9 @@ class OSRSTrackerApp:
                    command=self._remove_selected_watch).pack(side="left")
         ttk.Label(bar, text="Add items with the ☆ button on a Search result.",
                   style="Dim.TLabel").pack(side="left", padx=12)
+        self.watch_note = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.watch_note, style="Dim.TLabel"
+                  ).pack(side="left")
 
         cols = tuple(c[0] for c in self.WATCH_COLUMNS)
         tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
@@ -1584,6 +1642,8 @@ class OSRSTrackerApp:
             tree.delete(r)
         self.watch_id_map.clear()
         ages = self._trade_ages[tree] = {}
+        self.watch_note.set(self._volume_note(
+            [seconds for _l, seconds in volume.WINDOWS]))
         items = db.watchlist_items()
         if not items:
             tree.insert("", "end", values=(
@@ -1619,8 +1679,8 @@ class OSRSTrackerApp:
                     name, fmt(row["buy"]), fmt(row["sell"]), fmt(row["net"]),
                     f"{row['roi']:.1f}%",
                     self._volume_text(item_id, row["volume"], fmt),
-                    "-" if row["vol_12h"] is None else fmt(row["vol_12h"]),
-                    "-" if row["vol_24h"] is None else fmt(row["vol_24h"]),
+                    self._window_text(row["vol_12h"], 12 * 3600, fmt),
+                    self._window_text(row["vol_24h"], 24 * 3600, fmt),
                     fmt_last_trade(row["traded_at"]),
                     "⚠ Inactive" if not row["active"] else row["verdict"],
                     added_s,
@@ -1814,8 +1874,7 @@ class OSRSTrackerApp:
 
         def task():
             latest = api.get_all_latest_prices()
-            bulk = (self._volume.view(volume.STEP_SECONDS[timestep])
-                    or api.get_bulk_average(timestep))
+            bulk = self._volume.averages(timestep)
             return analyzer.find_volatile_items(
                 latest, bulk, self.item_data,
                 min_volume=1000, top_n=100,
@@ -1833,7 +1892,7 @@ class OSRSTrackerApp:
             self._render_volatile_table()
             self.volatile_status.set(f"{len(results)} movers in {timestep} window")
 
-        run_async(self.root, task, done)
+        run_async(task, done)
 
     def _sort_volatile(self, key: str, default_desc: bool):
         """Click handler for a column header — sort results by `key`."""
@@ -2056,7 +2115,7 @@ class OSRSTrackerApp:
             self._market = self._flip_raw
             self._apply_flip_filters()
 
-        run_async(self.root, task, done)
+        run_async(task, done)
 
     def _apply_flip_filters(self):
         """Recompute results from the last fetch using the current inputs."""
@@ -2146,6 +2205,8 @@ class OSRSTrackerApp:
             banner.append(
                 f"⏱ {slow} listed item(s) have a side not traded in the last "
                 f"5 min; the margin may have moved.")
+        if self._volume_note([3600]):
+            banner.append(self._volume_note([3600]))
         self.flip_banner.set("\n".join(banner))
 
         if not rows:
@@ -2268,7 +2329,7 @@ class OSRSTrackerApp:
             self.news_status.set(f"Cached {count} articles.")
             self._reload_news_cache()
 
-        run_async(self.root, task, done)
+        run_async(task, done)
 
     def _on_news_open(self, _event):
         sel = self.news_tree.selection()
@@ -2336,7 +2397,7 @@ class OSRSTrackerApp:
                 return
             self._redraw_chart_if_current(item_id)
 
-        run_async(self.root, fetch, done)
+        run_async(fetch, done)
 
     def _redraw_chart_if_current(self, item_id: int):
         """Redraw only if the chart is still showing this item."""
@@ -2733,7 +2794,7 @@ class OSRSTrackerApp:
             if self.ai_provider_var.get() == provider:
                 self._set_ai_model_choices(provider)
 
-        run_async(self.root, lambda: ai.list_models(api_key, url), done)
+        run_async(lambda: ai.list_models(api_key, url), done)
 
     def _on_ai_provider_changed(self):
         settings.save({"ai_provider": self.ai_provider_var.get()})
@@ -2819,10 +2880,10 @@ class OSRSTrackerApp:
                 action(value)
 
         def on_text(chunk):
-            self.root.after(0, if_current, self._ai_write, chunk)
+            ui_call(if_current, self._ai_write, chunk)
 
         def on_status(text):
-            self.root.after(0, if_current, self.ai_status.set, text)
+            ui_call(if_current, self.ai_status.set, text)
 
         def ask():
             return chat.send(question, api_key, on_text, on_status, cancel)
@@ -2845,7 +2906,7 @@ class OSRSTrackerApp:
             self.ai_status.set(f"Used {result['tokens']:,} tokens."
                                if result["tokens"] else "Done.")
 
-        run_async(self.root, ask, done)
+        run_async(ask, done)
 
     def _ai_stop(self):
         if self._ai_cancel:
@@ -2968,7 +3029,7 @@ class OSRSTrackerApp:
                 result["ok"] = True
                 close()
 
-            run_async(self.root, lambda: ai.verify_key(provider, key, url), done)
+            run_async(lambda: ai.verify_key(provider, key, url), done)
 
         def remove():
             ai.delete_key(provider)
@@ -3069,7 +3130,7 @@ class OSRSTrackerApp:
             self.update_status.set(f"Version {rel['version']} is available.")
             self._offer_update(rel)
 
-        run_async(self.root, updater.latest_release, done)
+        run_async(updater.latest_release, done)
 
     def _offer_update(self, rel: dict):
         newer = f"Version {rel['version']} is available (you have {APP_VERSION})."
@@ -3093,7 +3154,7 @@ class OSRSTrackerApp:
 
         def progress(done_bytes, total):
             pct = f" {done_bytes * 100 // total}%" if total else ""
-            self.root.after(0, lambda: self.update_status.set(
+            ui_call(lambda: self.update_status.set(
                 f"Downloading {rel['asset']['name']}…{pct}"))
 
         def finished(path, err):
@@ -3114,7 +3175,7 @@ class OSRSTrackerApp:
                 self.update_status.set("Update downloaded — drag it into "
                                        "Applications, then reopen the app.")
 
-        run_async(self.root, lambda: updater.download(rel["asset"], progress),
+        run_async(lambda: updater.download(rel["asset"], progress),
                   finished)
 
     def _open_data_folder(self):

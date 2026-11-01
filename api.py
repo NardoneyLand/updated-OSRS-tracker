@@ -17,6 +17,9 @@ API_BASE = "https://prices.runescape.wiki/api/v1/osrs"
 HEADERS = useragent.HEADERS  # shared; per-install contact, see useragent.py
 MAPPING_FILE = paths.data_file("mapping.json")
 MAPPING_MAX_AGE = 604_800  # 7 days
+STEP_SECONDS = {"5m": 300, "1h": 3600, "6h": 21600, "24h": 86400}
+# One shared connection. A new one per request costs memory on every check.
+SESSION = requests.Session()
 
 
 def get_mapping() -> list:
@@ -36,7 +39,7 @@ def get_mapping() -> list:
             except (OSError, ValueError):
                 pass  # corrupt/empty cache — fall through and re-download
 
-    r = requests.get(f"{API_BASE}/mapping", headers=HEADERS, timeout=15)
+    r = SESSION.get(f"{API_BASE}/mapping", headers=HEADERS, timeout=15)
     r.raise_for_status()
     data = r.json()
     # Write atomically so an interrupted write can't leave a broken cache.
@@ -51,7 +54,7 @@ def get_latest_price(item_id: int) -> Optional[dict]:
     """Latest high / low for a single item."""
     useragent.require()
     try:
-        r = requests.get(f"{API_BASE}/latest?id={item_id}", headers=HEADERS, timeout=10)
+        r = SESSION.get(f"{API_BASE}/latest?id={item_id}", headers=HEADERS, timeout=10)
         r.raise_for_status()
         return r.json()["data"].get(str(item_id))
     except Exception as exc:
@@ -66,7 +69,7 @@ def get_timeseries(item_id: int, timestep: str = "1h") -> list:
     """
     useragent.require()
     try:
-        r = requests.get(
+        r = SESSION.get(
             f"{API_BASE}/timeseries?timestep={timestep}&id={item_id}",
             headers=HEADERS, timeout=15
         )
@@ -80,7 +83,7 @@ def get_all_latest_prices() -> dict:
     """Bulk fetch — returns {item_id_str: {high, low, ...}} for every item."""
     useragent.require()
     try:
-        r = requests.get(f"{API_BASE}/latest", headers=HEADERS, timeout=20)
+        r = SESSION.get(f"{API_BASE}/latest", headers=HEADERS, timeout=20)
         r.raise_for_status()
         return r.json().get("data", {})
     except Exception:
@@ -93,8 +96,8 @@ def get_bulk_bucket(timestep: str, start: int) -> dict:
     that period isn't published yet. Raises if the request fails.
     """
     useragent.require()
-    r = requests.get(f"{API_BASE}/{timestep}?timestamp={int(start)}",
-                     headers=HEADERS, timeout=25)
+    r = SESSION.get(f"{API_BASE}/{timestep}?timestamp={int(start)}",
+                    headers=HEADERS, timeout=25)
     r.raise_for_status()
     return r.json().get("data", {})
 
@@ -109,19 +112,21 @@ def get_bulk_average(timestep: str = "1h") -> dict:
     trail a whole period behind (measured: /24h ended 41 hours ago).
     """
     useragent.require()
-    sizes = {"5m": 300, "1h": 3600, "6h": 21600, "24h": 86400}
-    if timestep not in sizes:
-        raise ValueError(f"timestep must be one of {sorted(sizes)}")
-    try:
-        if timestep != "5m":   # /5m has no such lag
-            size = sizes[timestep]
-            now = int(time.time())
-            current = now - now % size
-            for back in (1, 2):
+    if timestep not in STEP_SECONDS:
+        raise ValueError(f"timestep must be one of {sorted(STEP_SECONDS)}")
+    if timestep != "5m":   # /5m has no such lag
+        size = STEP_SECONDS[timestep]
+        now = int(time.time())
+        current = now - now % size
+        for back in (1, 2):
+            try:
                 data = get_bulk_bucket(timestep, current - back * size)
-                if data:
-                    return data
-        r = requests.get(f"{API_BASE}/{timestep}", headers=HEADERS, timeout=25)
+            except Exception:
+                continue       # the next try may still work
+            if data:
+                return data
+    try:
+        r = SESSION.get(f"{API_BASE}/{timestep}", headers=HEADERS, timeout=25)
         r.raise_for_status()
         return r.json().get("data", {})
     except Exception:

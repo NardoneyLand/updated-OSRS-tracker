@@ -30,15 +30,31 @@ import db
 
 FIVE_MIN = 300
 HOUR = 3600
-STEP_SECONDS = {"5m": FIVE_MIN, "1h": HOUR, "6h": 6 * HOUR, "24h": 24 * HOUR}
-# A couple more than the windows need, because the newest period of each
-# isn't published straight away.
-KEEP = {"5m": 14, "1h": 25}
+STEP_SECONDS = api.STEP_SECONDS
+# The windows shown to the user.
+WINDOWS = (("1h", HOUR), ("12h", 12 * HOUR), ("24h", 24 * HOUR))
+# About 2 hours of five-minute periods, so they can always reach back to the
+# end of the newest published hour.
+KEEP = {"5m": 26, "1h": 25}
 UPDATE_EVERY = 60          # seconds between looking for new periods
 BACKFILL_PAUSE = 1.0       # seconds between requests, to go easy on the Wiki
-# Past these ages a window is too old to call "the last hour" and so on.
-MAX_AGE_5M = 1200
-MAX_AGE_1H = 3 * HOUR
+
+# How long ago a window may have ended and still count as current. The margin
+# check uses the 5-minute view, so old averages there would mark good margins
+# as Suspect: a healthy newest period ended at most about 8 minutes ago.
+MAX_END_AGE = {FIVE_MIN: 480, HOUR: 1200}
+MAX_END_AGE_LONG = 1800
+# A period still empty this long after it ended is never coming.
+PUBLISH_GRACE = {"5m": 1800, "1h": 3 * HOUR}
+# Missing periods a window can absorb. Those numbers read a little low, so the
+# app marks them with * rather than leaving the column blank for up to a day.
+MAX_GAPS = {HOUR: 1, 6 * HOUR: 1, 12 * HOUR: 2, 24 * HOUR: 2}
+
+# Before the rolling views are ready: how often to ask the Wiki directly, and
+# how long to keep using its last good answer if a later request fails. Old
+# 5-minute averages are never reused (see MAX_END_AGE).
+FALLBACK_EVERY = {"5m": 120, "1h": 300, "6h": 300, "24h": 300}
+FALLBACK_KEEP = {"5m": 0, "1h": 2 * HOUR, "6h": 2 * HOUR, "24h": 2 * HOUR}
 
 
 def _trim(data: dict) -> dict:
@@ -84,14 +100,15 @@ def _newest_run(starts, step: int) -> List[int]:
 class VolumeHistory:
     """
     Reading is safe from any thread: the views are built off to the side and
-    swapped in whole. on_change is called from the background thread whenever
-    a new period arrives.
+    swapped in whole. on_change is called from the background thread, so it
+    must not touch the window directly.
     """
 
     def __init__(self, on_change: Optional[Callable[[], None]] = None):
         self._on_change = on_change
         self._buckets = {"5m": {}, "1h": {}}   # step -> {start: trimmed data}
-        self._views = {}                       # seconds -> (view, newest start)
+        self._views = {}                       # seconds -> (view, end, partial)
+        self._fallbacks = {}                   # step -> (data, asked_at, got_at)
 
     # ── Reading ───────────────────────────────────────────────────────────────
 
@@ -100,9 +117,33 @@ class VolumeHistory:
         found = self._views.get(seconds)
         if not found:
             return None
-        data, newest = found
-        limit = MAX_AGE_5M if seconds <= HOUR else MAX_AGE_1H
-        return data if time.time() - newest <= limit else None
+        data, end, _partial = found
+        limit = MAX_END_AGE.get(seconds, MAX_END_AGE_LONG)
+        return data if time.time() - end <= limit else None
+
+    def is_partial(self, seconds: int) -> bool:
+        """True if a ready window is missing a period, so it reads a bit low."""
+        return self.view(seconds) is not None and self._views[seconds][2]
+
+    def averages(self, step: str) -> dict:
+        """
+        A /5m, /1h, /6h or /24h response for anything that needs one: the
+        rolling window if it's ready, otherwise the Wiki's newest full period,
+        asked for no more often than FALLBACK_EVERY.
+        """
+        data = self.view(STEP_SECONDS[step])
+        if data is not None:
+            return data
+        now = time.time()
+        cached, asked_at, got_at = self._fallbacks.get(step, ({}, 0, 0))
+        keep = max(FALLBACK_EVERY[step], FALLBACK_KEEP[step])
+        usable = cached and now - got_at <= keep
+        if not usable or now - asked_at >= FALLBACK_EVERY[step]:
+            fresh = api.get_bulk_average(step)
+            if fresh:
+                cached, got_at = fresh, now
+            self._fallbacks[step] = (cached, now, got_at)
+        return cached if now - got_at <= keep else {}
 
     def sides(self, item_id, seconds: int) -> Optional[Tuple[int, int]]:
         """(instant buys, instant sells) in a window. None = window not ready;
@@ -134,9 +175,12 @@ class VolumeHistory:
                          name="volume-history").start()
 
     def _run(self) -> None:
-        self._load()
+        loaded = False
         while True:
             try:
+                if not loaded:
+                    self._load()
+                    loaded = True
                 self.update()
             except Exception:
                 applog.log.warning("Volume history update failed", exc_info=True)
@@ -144,13 +188,14 @@ class VolumeHistory:
 
     def _load(self) -> None:
         """Pick up what was saved last time."""
-        try:
-            for step, start, text in db.load_volume_buckets():
+        for step, start, text in db.load_volume_buckets():
+            try:
                 if step in self._buckets:
                     self._buckets[step][start] = {
-                        sys.intern(k): tuple(v) for k, v in json.loads(text).items()}
-        except Exception:
-            applog.log.warning("Could not load volume history", exc_info=True)
+                        sys.intern(k): tuple(v)
+                        for k, v in json.loads(text).items()}
+            except (ValueError, TypeError):
+                applog.log.warning(f"Skipping a damaged {step} volume period")
         self._prune()
         self._rebuild()
         self._notify()
@@ -168,54 +213,77 @@ class VolumeHistory:
         return missing
 
     def update(self) -> None:
-        """Fetch every period we're missing. A newest period that isn't
-        published yet comes back empty and is simply tried again next time."""
+        """
+        Fetch every period we're missing. A newest period that isn't published
+        yet comes back empty and is tried again next time; one that's still
+        empty long after it ended is saved as a known gap and left alone.
+        """
+        self._prune()
         missing = self._wanted()
-        for number, (step, start) in enumerate(missing):
-            if number:
-                time.sleep(BACKFILL_PAUSE)
-            data = api.get_bulk_bucket(step, start)
-            if not data:
-                continue
-            trimmed = _trim(data)
-            db.save_volume_bucket(step, start, json.dumps(
-                trimmed, separators=(",", ":")))
-            self._buckets[step][start] = trimmed
-            self._prune()
-            self._rebuild()
-            self._notify()
+        changed = False
+        try:
+            for number, (step, start) in enumerate(missing):
+                if number:
+                    time.sleep(BACKFILL_PAUSE)
+                data = api.get_bulk_bucket(step, start)
+                ended = start + STEP_SECONDS[step]
+                if data or time.time() - ended >= PUBLISH_GRACE[step]:
+                    trimmed = _trim(data)
+                    db.save_volume_bucket(step, start, json.dumps(
+                        trimmed, separators=(",", ":")))
+                    self._buckets[step][start] = trimmed
+                    changed = True
+                # The views can only change once a step's periods are all in.
+                last_of_step = (number + 1 == len(missing)
+                                or missing[number + 1][0] != step)
+                if changed and last_of_step:
+                    self._rebuild()
+                    changed = False
+                self._notify()
+        finally:
+            if changed:             # a request failed partway through
+                self._rebuild()
+                self._notify()
 
     def _prune(self) -> None:
         now = int(time.time())
         for step, count in KEEP.items():
             size = STEP_SECONDS[step]
             cutoff = now - now % size - count * size
-            for start in [s for s in self._buckets[step] if s < cutoff]:
+            stale = [s for s in self._buckets[step] if s < cutoff]
+            for start in stale:
                 del self._buckets[step][start]
-            db.delete_volume_buckets_before(step, cutoff)
+            if stale:
+                db.delete_volume_buckets_before(step, cutoff)
 
     def _rebuild(self) -> None:
         fives, hours = self._buckets["5m"], self._buckets["1h"]
         five_run = _newest_run(fives, FIVE_MIN)
         hour_run = _newest_run(hours, HOUR)
         views: Dict[int, tuple] = {}
+
+        def add(seconds: int, periods: List[dict], end: int) -> None:
+            gaps = sum(1 for period in periods if not period)
+            if gaps <= MAX_GAPS[seconds]:
+                views[seconds] = (_merge(periods), end, gaps > 0)
+
         if five_run:
-            views[FIVE_MIN] = (_merge([fives[five_run[0]]]), five_run[0])
-        if len(five_run) >= 12:
-            views[HOUR] = (_merge([fives[s] for s in five_run[:12]]), five_run[0])
+            newest_end = five_run[0] + FIVE_MIN
+            views[FIVE_MIN] = (_merge([fives[five_run[0]]]), newest_end, False)
+            if len(five_run) >= 12:
+                add(HOUR, [fives[s] for s in five_run[:12]], newest_end)
         if hour_run:
             # Five-minute periods since the newest full hour, if they join up.
             hour_end = hour_run[0] + HOUR
             tail = [s for s in five_run if s >= hour_end]
             if tail and tail[-1] != hour_end:
                 tail = []
+            end = tail[0] + FIVE_MIN if tail else hour_end
             for seconds in (6 * HOUR, 12 * HOUR, 24 * HOUR):
                 need = round((seconds - len(tail) * FIVE_MIN) / HOUR)
                 if len(hour_run) >= need:
-                    views[seconds] = (
-                        _merge([fives[s] for s in tail]
-                               + [hours[s] for s in hour_run[:need]]),
-                        hour_run[0])
+                    add(seconds, [fives[s] for s in tail]
+                        + [hours[s] for s in hour_run[:need]], end)
         self._views = views
 
     def _notify(self) -> None:

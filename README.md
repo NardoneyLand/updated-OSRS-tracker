@@ -145,6 +145,7 @@ find-python.ps1     shared Python 3.10+ discovery (used by the .ps1 scripts)
 release.sh          build + .zip + .dmg + (optional) GitHub publish (macOS)
 make_icns.sh        Convert icon source to .icns (macOS)
 requirements.txt    Python deps
+tests/              Tests: python tests/run_all.py (opens real app windows)
 ```
 
 ---

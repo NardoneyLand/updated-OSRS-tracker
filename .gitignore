@@ -35,3 +35,4 @@ osrs_tracker.db-journal
 # App log (dev runs write it to the project folder)
 *.log
 *.log.[0-9]
+tests/*.png

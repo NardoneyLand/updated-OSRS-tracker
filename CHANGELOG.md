@@ -3,6 +3,22 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.3.1 — 2026-11-01
+
+**Fixed**
+- The app now uses less memory and no longer builds up system resources while
+  it stays open.
+- Good flips are no longer marked Suspect or dropped from Alerts when the
+  Wiki's 5-minute data is out of date.
+- A short Wiki outage no longer makes alerts disappear or leaves the 12h and
+  24h volumes blank for hours.
+- Volumes stay current even when the Wiki is slow to publish its newest hour.
+- Alerts from before 1.3.0 show "-" for Vol 1h instead of a false "0 ▼".
+
+**Changed**
+- A * on a volume means the Wiki is missing part of that period, so it may read
+  slightly low.
+
 ## 1.3.0 — 2026-11-01
 
 **New**

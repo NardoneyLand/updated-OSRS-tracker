@@ -66,8 +66,10 @@ TOOLS = [
         "name": "get_item",
         "description": (
             "Full details for one item: live prices, flip stats, buy limit, "
-            "price changes over 24 hours and 7 days, and the app's Buy / "
-            "Hold / Sell signal. Accepts an approximate name."),
+            "units traded in the last 1, 12 and 24 hours (null means that "
+            "data hasn't loaded yet, not zero trades), price changes over 24 "
+            "hours and 7 days, and the app's Buy / Hold / Sell signal. Accepts "
+            "an approximate name."),
         "schema": {
             "type": "object",
             "properties": {"name": {"type": "string",
@@ -171,7 +173,8 @@ class MarketTools:
     def __init__(self, get_mapping: Callable[[], list],
                  history: Optional[volume.VolumeHistory] = None):
         self._get_mapping = get_mapping
-        self._history = history
+        # Without a running history, averages() asks the Wiki directly.
+        self._history = history or volume.VolumeHistory()
         self._market = None        # (latest, bulk_1h, fetched_at, bulk_5m)
         self._lock = threading.Lock()
 
@@ -206,23 +209,15 @@ class MarketTools:
             raise ToolError("The item list is still loading. Try again shortly.")
         return mapping
 
-    def _window(self, step: str) -> dict:
-        """Rolling data if it's ready, otherwise the Wiki's newest full period."""
-        data = (self._history.view(volume.STEP_SECONDS[step])
-                if self._history else None)
-        return data or api.get_bulk_average(step)
-
     def _traded(self, item_id: int) -> dict:
         """Units traded by window: 'instant_buys' at the higher price and
-        'instant_sells' at the lower."""
+        'instant_sells' at the lower. null = not loaded yet, not zero."""
         traded = {}
-        if self._history:
-            for label, seconds in (("last_1h", 3600), ("last_12h", 12 * 3600),
-                                   ("last_24h", 24 * 3600)):
-                sides = self._history.sides(item_id, seconds)
-                if sides:
-                    traded[label] = {"instant_buys": sides[0],
-                                     "instant_sells": sides[1]}
+        for label, seconds in volume.WINDOWS:
+            sides = self._history.sides(item_id, seconds)
+            traded[f"last_{label}"] = sides and {
+                "instant_buys": sides[0], "instant_sells": sides[1],
+                "may_read_low": self._history.is_partial(seconds)}
         return traded
 
     def _latest_market(self) -> tuple:
@@ -231,10 +226,10 @@ class MarketTools:
                     and time.time() - self._market[2] < MARKET_MAX_AGE):
                 return self._market
             latest = api.get_all_latest_prices()
-            bulk = self._window("1h")
+            bulk = self._history.averages("1h")
             if not latest or not bulk:
                 raise ToolError("Could not fetch live prices from the OSRS Wiki.")
-            bulk_5m = self._window("5m")
+            bulk_5m = self._history.averages("5m")
             self._market = (latest, bulk, time.time(), bulk_5m)
             return self._market
 
@@ -329,7 +324,7 @@ class MarketTools:
     def _get_movers(self, args: dict) -> dict:
         window = _choice(args, "window", MOVER_WINDOWS, "1h")
         latest = api.get_all_latest_prices()
-        bulk = self._window(window)
+        bulk = self._history.averages(window)
         if not latest or not bulk:
             raise ToolError("Could not fetch live prices from the OSRS Wiki.")
         rows = analyzer.find_volatile_items(latest, bulk, self._mapping(),
