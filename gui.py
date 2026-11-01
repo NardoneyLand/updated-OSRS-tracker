@@ -19,6 +19,8 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk, messagebox, scrolledtext
 
+import ai
+import aitools
 import api
 import analyzer
 import applog
@@ -56,6 +58,17 @@ PRICE_FORMATS = ["Short (1.2K)", "Exact (1,240)"]
 STEP_SECONDS = {"5m": 300, "1h": 3600, "6h": 6 * 3600, "24h": 86400}
 CHART_MIN_POINTS = 4              # zooming stops at about this many points
 FLIP_MAX_ROWS = 300
+AI_INTRO = ("Ask about flips, prices, your Watchlist or the news. The AI looks "
+            "up live data from this app before it answers.")
+AI_STARTERS = [
+    ("Best flips for my budget",
+     "What are the best flips for my capital right now, and why?"),
+    ("What's moving now?",
+     "Which items are making the biggest moves right now, and are any of "
+     "them worth acting on?"),
+    ("Review my watchlist",
+     "Review my watchlist and alerts. Which items should I act on or skip?"),
+]
 
 # Fantasy / OSRS-inspired palette (avoiding Jagex copyrighted colors directly)
 COLOR_BG       = "#1a120b"   # near-black brown
@@ -186,7 +199,7 @@ HELP_SECTIONS = [
      "    5.  Add items you want to follow to your Watchlist from the "
      "Search tab.\n\n"
      "The tabs, left to right: FlipRec · Alerts · Watchlist · Volatile · "
-     "Search · News · Help."),
+     "Search · Ask AI · News · Help."),
 
     ("FlipRec — flip recommendations",
      "FlipRec lists every item you could buy and immediately resell at a "
@@ -328,6 +341,40 @@ HELP_SECTIONS = [
      "Score ≥ 2 → BUY (high), 1 → BUY (moderate), 0 → HOLD, "
      "−1 → HOLD/SELL, ≤ −2 → SELL. Moves over ±25% trigger a "
      "manipulation guard that pulls the signal toward neutral."),
+
+    ("Ask AI — suggestions from your own AI account",
+     "Ask questions in plain English, such as \"What should I flip with "
+     "20m?\" or \"Is now a good time to buy a whip?\" The AI looks up "
+     "live prices, flips, big movers, item history, your Watchlist, your "
+     "alerts and the news, then answers using those numbers.\n\n"
+     "Setting it up:\n"
+     "    1.  Choose a Provider: Anthropic, OpenAI, OpenRouter, or "
+     "OpenAI-compatible for any other service with an OpenAI-compatible API "
+     "(such as Groq, or a local server such as Ollama).\n"
+     "    2.  Click API key… and paste a key from that service. For "
+     "OpenAI-compatible, also enter the service's API URL. A Claude or "
+     "ChatGPT subscription doesn't include API use, so you may need to add "
+     "credit to your API account.\n"
+     "    3.  Choose a Model, or type the ID of another one. The model must "
+     "support tools (also called function calling), because that's how it "
+     "reads the app's data. Faster models usually cost less. Changing the "
+     "model starts a new conversation.\n\n"
+     "What it costs: the service bills your account for each question. "
+     "The token count shown after each answer, when the service reports one, "
+     "is what that question used. "
+     "Longer conversations cost more per question, so click New chat when "
+     "you change topic.\n\n"
+     "Your key is kept in your computer's credential store (Windows "
+     "Credential Manager or macOS Keychain), not in your settings file, "
+     "and is only sent to the service you chose. Remove it any time from "
+     "the API key… window.\n\n"
+     "What gets shared: your question, plus whatever the AI looks up: "
+     "market data, your capital and item filter, Watchlist, alerts and news "
+     "headlines. Your contact is not shared. Services like OpenRouter pass "
+     "it on to whichever company runs the model you pick.\n\n"
+     "The AI can read this data but can't change anything in the app or "
+     "place trades. It can make mistakes, so check the numbers in game "
+     "before you trade."),
 
     ("News",
      "The latest official OSRS news loads automatically when the app "
@@ -574,7 +621,8 @@ class OSRSTrackerApp:
         style.map("TButton",
                   background=[("active", COLOR_BORDER),
                               ("pressed", COLOR_PANEL)],
-                  foreground=[("active", COLOR_ACCENT_HI)])
+                  foreground=[("disabled", COLOR_DIM),
+                              ("active", COLOR_ACCENT_HI)])
 
         # Entry / Combobox
         style.configure("TEntry",
@@ -687,6 +735,7 @@ class OSRSTrackerApp:
             value=settings.load().get("flip_price_format", PRICE_FORMATS[0]))
 
         self.search_tab = self._build_search_tab()
+        self.ai_tab = self._build_ai_tab()
         self.alerts_tab = self._build_alerts_tab()
         self.watchlist_tab = self._build_watchlist_tab()
         self.volatile_tab = self._build_volatile_tab()
@@ -699,6 +748,7 @@ class OSRSTrackerApp:
         self.notebook.add(self.watchlist_tab, text="Watchlist")
         self.notebook.add(self.volatile_tab, text="Volatile")
         self.notebook.add(self.search_tab, text="Search")
+        self.notebook.add(self.ai_tab, text="Ask AI")
         self.notebook.add(self.news_tab, text="News")
         self.notebook.add(self.help_tab, text="Help")
 
@@ -2311,6 +2361,405 @@ class OSRSTrackerApp:
         self._chart_drag = None
         self.history_canvas.configure(cursor="")
 
+    # ── Ask AI tab ────────────────────────────────────────────────────────────
+
+    def _build_ai_tab(self) -> ttk.Frame:
+        frame = ttk.Frame(self.notebook)
+        prefs = settings.load()
+        self._ai_tools = aitools.MarketTools(lambda: self.item_data)
+        self._ai_chat = None           # the current ai.Chat
+        self._ai_cancel = None         # set while a question is running
+        self._ai_seq = 0               # latest question (see _ai_send)
+        self._ai_live_models = {}      # (provider, url) -> model IDs
+
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", padx=20, pady=(20, 10))
+
+        ttk.Label(bar, text="Provider:", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        provider = prefs.get("ai_provider")
+        self.ai_provider_var = tk.StringVar(
+            value=provider if provider in ai.PROVIDERS else ai.PROVIDERS[0])
+        provider_combo = ttk.Combobox(
+            bar, textvariable=self.ai_provider_var, state="readonly",
+            width=17, values=ai.PROVIDERS)
+        provider_combo.pack(side="left", padx=(0, 16))
+        provider_combo.bind("<<ComboboxSelected>>",
+                            lambda _e: self._on_ai_provider_changed())
+
+        ttk.Label(bar, text="Model:", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        self.ai_model_var = tk.StringVar()
+        self.ai_model_combo = ttk.Combobox(
+            bar, textvariable=self.ai_model_var, width=30)
+        self.ai_model_combo.pack(side="left", padx=(0, 16))
+        for event in ("<<ComboboxSelected>>", "<FocusOut>", "<Return>"):
+            self.ai_model_combo.bind(event,
+                                     lambda _e: self._save_ai_model())
+
+        ttk.Button(bar, text="API key…",
+                   command=lambda: self._ai_key_dialog(
+                       self.ai_provider_var.get())).pack(side="left")
+        self.ai_key_status = tk.StringVar(value="")
+        ttk.Label(bar, textvariable=self.ai_key_status, style="Dim.TLabel"
+                  ).pack(side="left", padx=12)
+        ttk.Button(bar, text="New chat", command=self._ai_new_chat
+                   ).pack(side="right")
+
+        # Packed bottom-up so the input stays visible in a short window.
+        ttk.Label(frame,
+                  text=("Your question and the data the AI looks up go to "
+                        "the service you chose, which bills your account. "
+                        "Answers can be wrong. See Help."),
+                  style="Dim.TLabel", wraplength=1000, justify="center"
+                  ).pack(side="bottom", pady=(0, 10))
+
+        input_row = ttk.Frame(frame)
+        input_row.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
+        self.ai_send_btn = ttk.Button(input_row, text="Send",
+                                      command=self._ai_send)
+        self.ai_send_btn.pack(side="right", padx=(8, 0))
+        self.ai_stop_btn = ttk.Button(input_row, text="Stop", state="disabled",
+                                      command=self._ai_stop)
+        self.ai_stop_btn.pack(side="right", padx=(8, 0))
+        self.ai_input = tk.Text(
+            input_row, height=3, wrap="word",
+            background=COLOR_INPUT, foreground=COLOR_TEXT,
+            insertbackground=COLOR_ACCENT,
+            highlightthickness=1, highlightbackground=COLOR_BORDER,
+            highlightcolor=COLOR_ACCENT, borderwidth=0,
+            padx=8, pady=6, font=FONT_BODY)
+        self.ai_input.pack(side="left", fill="x", expand=True)
+        self.ai_input.bind("<Return>", self._on_ai_input_return)
+
+        starters = ttk.Frame(frame)
+        starters.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
+        self.ai_status = tk.StringVar(value="")
+        ttk.Label(starters, textvariable=self.ai_status, style="Dim.TLabel"
+                  ).pack(side="right")
+        for label, question in AI_STARTERS:
+            ttk.Button(starters, text=label, style="Range.TButton",
+                       command=lambda q=question: self._ai_send(q)
+                       ).pack(side="left", padx=(0, 6))
+
+        text = scrolledtext.ScrolledText(
+            frame, wrap="word", state="disabled",
+            background=COLOR_PANEL, foreground=COLOR_TEXT,
+            insertbackground=COLOR_ACCENT,
+            highlightthickness=0, borderwidth=0,
+            padx=20, pady=16, font=FONT_BODY)
+        text.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        text.tag_configure("speaker", foreground=COLOR_ACCENT,
+                           font=("Georgia", 12, "bold"), spacing1=10,
+                           spacing3=4)
+        text.tag_configure("body", foreground=COLOR_TEXT, spacing3=4)
+        text.tag_configure("note", foreground=COLOR_DIM, spacing3=4)
+        text.tag_configure("error", foreground=COLOR_RED, spacing3=4)
+        self.ai_text = text
+
+        self._show_ai_models()
+        self._ai_write(AI_INTRO + "\n", "note")
+        return frame
+
+    def _ai_model_for(self, provider: str) -> str:
+        """The model last used with this provider, or its default."""
+        saved = settings.load().get(f"ai_model_{provider.lower()}")
+        return saved or next(iter(ai.MODELS[provider]), "")
+
+    def _show_ai_models(self):
+        provider = self.ai_provider_var.get()
+        self._set_ai_model_choices(provider)
+        self.ai_model_var.set(self._ai_model_for(provider))
+
+    def _set_ai_model_choices(self, provider: str):
+        """The suggested models first, then the service's full list."""
+        suggested = ai.MODELS[provider]
+        live = self._ai_live_models.get((provider, ai.base_url(provider)), [])
+        self.ai_model_combo.configure(
+            values=suggested + [m for m in live if m not in suggested])
+
+    def _refresh_ai_models(self, force: bool = False):
+        """Fetch the selected service's model list, once per session."""
+        provider = self.ai_provider_var.get()
+        url = ai.base_url(provider)
+        if not ai.has_model_list(provider) or not ai.is_set_up(provider):
+            return
+        cache_key = (provider, url)
+        if cache_key in self._ai_live_models and not force:
+            return
+        api_key = ai.get_key(provider)
+
+        def done(models, err):
+            if err:
+                return     # logged; the suggestions and typing an ID still work
+            self._ai_live_models[cache_key] = models
+            if self.ai_provider_var.get() == provider:
+                self._set_ai_model_choices(provider)
+
+        run_async(self.root, lambda: ai.list_models(api_key, url), done)
+
+    def _on_ai_provider_changed(self):
+        settings.save({"ai_provider": self.ai_provider_var.get()})
+        self._show_ai_models()
+        self._update_ai_key_status()
+        self._refresh_ai_models()
+
+    def _save_ai_model(self):
+        model = self.ai_model_var.get().strip()
+        if model:
+            provider = self.ai_provider_var.get().lower()
+            settings.save({f"ai_model_{provider}": model})
+
+    def _update_ai_key_status(self):
+        provider = self.ai_provider_var.get()
+        name = ai.service_name(provider, ai.base_url(provider))
+        self.ai_key_status.set(f"{name} key saved" if ai.is_set_up(provider)
+                               else f"No {provider} key yet")
+
+    def _on_ai_input_return(self, event):
+        """Enter sends; Shift+Enter starts a new line."""
+        if event.state & 0x0001:
+            return None
+        self._ai_send()
+        return "break"
+
+    def _ai_write(self, text: str, tag: str = "body"):
+        # Follow the reply only if the reader hasn't scrolled up.
+        at_end = self.ai_text.yview()[1] >= 0.999
+        self.ai_text.configure(state="normal")
+        self.ai_text.insert("end", text, tag)
+        self.ai_text.configure(state="disabled")
+        if at_end:
+            self.ai_text.see("end")
+
+    def _set_ai_busy(self, busy: bool):
+        self.ai_send_btn.config(state="disabled" if busy else "normal")
+        self.ai_stop_btn.config(state="normal" if busy else "disabled")
+
+    def _ai_send(self, question: str = None):
+        if self._ai_cancel:
+            return                     # still answering; Stop is available
+        typed = question is None
+        if typed:
+            question = self.ai_input.get("1.0", "end").strip()
+        provider = self.ai_provider_var.get()
+        model = self.ai_model_var.get().strip()
+        if not question:
+            return
+        if not model:
+            self.ai_status.set("Choose a model first.")
+            return
+
+        if not ai.is_set_up(provider) and not self._ai_key_dialog(provider):
+            return
+        api_key = ai.get_key(provider)
+        url = ai.base_url(provider)
+        if typed:
+            self.ai_input.delete("1.0", "end")
+        self._save_ai_model()
+
+        chat = self._ai_chat
+        if not chat or (chat.provider, chat.model, chat.url) != (provider, model, url):
+            if chat and chat.history:
+                self._ai_write(f"\nNow using {model}. This is a new "
+                               "conversation, so it can't see the earlier "
+                               "questions.\n", "note")
+            chat = self._ai_chat = ai.Chat(provider, model, self._ai_tools, url)
+
+        self._ai_write("You\n", "speaker")
+        self._ai_write(question + "\n", "body")
+        self._ai_write(f"{model}\n", "speaker")
+
+        # Each question gets a number; once it is stopped or replaced, any
+        # output still on its way from the old thread is ignored.
+        self._ai_seq += 1
+        seq = self._ai_seq
+        cancel = self._ai_cancel = threading.Event()
+        self._set_ai_busy(True)
+
+        def if_current(action, value):
+            if seq == self._ai_seq:
+                action(value)
+
+        def on_text(chunk):
+            self.root.after(0, if_current, self._ai_write, chunk)
+
+        def on_status(text):
+            self.root.after(0, if_current, self.ai_status.set, text)
+
+        def ask():
+            return chat.send(question, api_key, on_text, on_status, cancel)
+
+        def done(result, err):
+            if seq != self._ai_seq:
+                return
+            self._ai_cancel = None
+            self._set_ai_busy(False)
+            self._ai_write("\n")
+            if err:
+                self.ai_status.set("")
+                self._ai_write(
+                    f"{err}\n" if isinstance(err, ai.AIError) else
+                    "Something went wrong while asking the AI. The details "
+                    "were saved to the log file.\n", "error")
+                return
+            if result["notice"]:
+                self._ai_write(result["notice"] + "\n", "note")
+            self.ai_status.set(f"Used {result['tokens']:,} tokens."
+                               if result["tokens"] else "Done.")
+
+        run_async(self.root, ask, done)
+
+    def _ai_stop(self):
+        if self._ai_cancel:
+            self._ai_cancel.set()
+            self._ai_cancel = None
+            self._ai_seq += 1
+            self._set_ai_busy(False)
+            self.ai_status.set("")
+            self._ai_write("\n(Stopped. The AI won't remember this "
+                           "question.)\n", "note")
+
+    def _ai_new_chat(self):
+        self._ai_stop()
+        self._ai_chat = None
+        self.ai_status.set("")
+        self.ai_text.configure(state="normal")
+        self.ai_text.delete("1.0", "end")
+        self.ai_text.configure(state="disabled")
+        self._ai_write(AI_INTRO + "\n", "note")
+
+    def _ai_key_dialog(self, provider: str) -> bool:
+        """Modal dialog to add or remove an API key. True if a key was saved."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f"{provider} API key")
+        dlg.configure(bg=COLOR_BG)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+
+        body = ttk.Frame(dlg)
+        body.pack(fill="both", expand=True, padx=24, pady=20)
+
+        ttk.Label(body, text=f"{provider} API key", style="Header.TLabel"
+                  ).pack(anchor="w", pady=(0, 10))
+        custom = provider == ai.COMPATIBLE
+        ttk.Label(body, wraplength=480, justify="left", text=(
+            "Use any service with an OpenAI-compatible API, such as Groq, or "
+            "a local server such as Ollama. Any charges come from that "
+            "service." if custom else
+            f"Ask AI uses your own {provider} account, and {provider} bills "
+            "you for each question. A Claude or ChatGPT subscription doesn't "
+            "include API use.")).pack(anchor="w")
+        if provider in ai.KEY_PAGES:
+            ttk.Button(body, text=f"Get a key from {provider}",
+                       command=lambda: webbrowser.open(ai.KEY_PAGES[provider])
+                       ).pack(anchor="w", pady=(10, 0))
+
+        url_var = tk.StringVar(value=ai.base_url(provider) or "")
+        if custom:
+            ttk.Label(body, style="TLabel", text="API URL:"
+                      ).pack(anchor="w", pady=(12, 4))
+            ttk.Entry(body, textvariable=url_var, width=56
+                      ).pack(anchor="w", fill="x")
+            ttk.Label(body, style="Dim.TLabel", wraplength=480, justify="left",
+                      text=("For example https://api.groq.com/openai/v1 or "
+                            "http://localhost:11434/v1")
+                      ).pack(anchor="w", pady=(4, 0))
+
+        has_key = bool(ai.get_key(provider))
+        key_prompt = "Paste your key:"
+        if has_key:
+            key_prompt = ("A key is saved. To change the URL or the key, "
+                          "enter the key again:" if custom else
+                          "A key is saved. Paste a new one to replace it:")
+        ttk.Label(body, style="TLabel", text=key_prompt
+                  ).pack(anchor="w", pady=(12, 4))
+        var = tk.StringVar()
+        entry = ttk.Entry(body, textvariable=var, width=56, show="•")
+        entry.pack(anchor="w", fill="x")
+        entry.focus_set()
+
+        ttk.Label(body, style="Dim.TLabel", wraplength=480, justify="left",
+                  text=("Kept in your computer's credential store and only "
+                        f"sent to {'this URL' if custom else provider}.")
+                  ).pack(anchor="w", pady=(8, 0))
+        error = tk.StringVar()
+        tk.Label(body, textvariable=error, bg=COLOR_BG, fg=COLOR_RED,
+                 font=FONT_BODY, wraplength=480, justify="left"
+                 ).pack(anchor="w", pady=(4, 0))
+
+        result = {"ok": False, "open": True}
+
+        def close(_e=None):
+            result["open"] = False
+            dlg.destroy()
+
+        def save(_e=None):
+            key = var.get().strip()
+            url = ai.base_url(provider)
+            if custom:
+                try:
+                    url = ai.clean_base_url(url_var.get())
+                except ai.AIError as exc:
+                    error.set(str(exc))
+                    return
+            if not ai.looks_like_key(key):
+                error.set("That doesn't look like an API key. Copy the whole "
+                          "key, with no spaces. A local server with no keys "
+                          "accepts any text of 8 or more characters.")
+                return
+            save_btn.config(state="disabled")
+            error.set("Checking the key…")
+
+            def done(warning, err):
+                if not result["open"]:
+                    return             # the dialog was cancelled meanwhile
+                save_btn.config(state="normal")
+                if err:
+                    error.set(str(err) if isinstance(err, ai.AIError) else
+                              f"Could not check the key: {type(err).__name__}")
+                    return
+                note = warning or f"{ai.service_name(provider, url)} key saved."
+                if custom:
+                    settings.save({"ai_base_url": url})
+                if not ai.save_key(provider, key):
+                    note = ("No credential store is available, so the key "
+                            "will only be kept until you close the app.")
+                self.ai_status.set(note)
+                self._update_ai_key_status()
+                self._refresh_ai_models(force=True)
+                result["ok"] = True
+                close()
+
+            run_async(self.root, lambda: ai.verify_key(provider, key, url), done)
+
+        def remove():
+            ai.delete_key(provider)
+            self.ai_status.set(f"{provider} key removed.")
+            self._update_ai_key_status()
+            close()
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(14, 0))
+        ttk.Button(buttons, text="Cancel", command=close).pack(side="right")
+        save_btn = ttk.Button(buttons, text="Save", command=save)
+        save_btn.pack(side="right", padx=(0, 8))
+        if has_key:
+            ttk.Button(buttons, text="Remove key", command=remove
+                       ).pack(side="left")
+        dlg.bind("<Return>", save)
+        dlg.bind("<Escape>", close)
+        dlg.protocol("WM_DELETE_WINDOW", close)
+
+        dlg.update_idletasks()
+        x = (dlg.winfo_screenwidth() - dlg.winfo_reqwidth()) // 2
+        y = (dlg.winfo_screenheight() - dlg.winfo_reqheight()) // 3
+        dlg.geometry(f"+{x}+{y}")
+        dlg.grab_set()
+        dlg.lift()
+        self.root.wait_window(dlg)
+        return result["ok"]
+
     # ── Help tab ──────────────────────────────────────────────────────────────
 
     def _build_help_tab(self) -> ttk.Frame:
@@ -2476,6 +2925,10 @@ class OSRSTrackerApp:
             # Same: fetch on first visit; the Refresh button re-fetches.
             if self._flip_raw is None:
                 self._refresh_fliprec()
+        elif tab is self.ai_tab:
+            self._update_ai_key_status()
+            self._refresh_ai_models()
+            self.ai_input.focus_set()
         elif tab is self.news_tab:
             self._reload_news_cache()
 

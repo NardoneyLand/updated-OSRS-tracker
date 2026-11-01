@@ -4,7 +4,7 @@ A desktop app for finding profitable Old School RuneScape Grand Exchange
 flips (after the GE tax), alerting you to big opportunities, and tracking
 prices and news. Tkinter GUI, distributed as a macOS `.app` bundle and a Windows `.exe`.
 
-Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** · **News** · **Help**
+Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** · **Ask AI** · **News** · **Help**
 
 ---
 
@@ -15,6 +15,7 @@ Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** �
 - **Watchlist** — add items from Search and follow their live margins.
 - **Volatile scanner** — the biggest movers across the whole GE over 5m / 1h / 6h / 24h.
 - **Item search + price chart** — autocomplete lookup with a Buy / Hold / Sell signal from price, volume and momentum, plus the item's price chart (1H to 1 year, backed by the OSRS Wiki's history) on the same page.
+- **Ask AI** — ask an AI for suggestions using your own API key from Anthropic, OpenAI, OpenRouter, or any service with an OpenAI-compatible API. The AI can look up live flips, big movers, item history, your Watchlist, your alerts and the news, but it can't change anything or place trades.
 - **Live news** — the official OSRS news feed, loaded on launch.
 - **In-app Help tab** — explains every tab, the verdicts and the GE tax.
 
@@ -129,6 +130,8 @@ api.py              OSRS Wiki Prices API wrapper
 db.py               SQLite layer (price history, alerts, news cache)
 search.py           Fuzzy item search
 analyzer.py         Trend, alert, prediction, volatility logic
+ai.py               Ask AI: API keys and the chat loops for each kind of API
+aitools.py          Ask AI: the read-only data lookups the AI can call
 scraper.py          OSRS news RSS scraper
 paths.py            Resolves writable data directory (dev vs. bundled)
 
@@ -149,6 +152,7 @@ requirements.txt    Python deps
 
 - Prices: [OSRS Wiki Prices API](https://prices.runescape.wiki/) — public, no key, ~60s upstream refresh. The Wiki asks apps to send a descriptive User-Agent with a contact. On first launch the app asks each user for their own contact (Discord name, email, …) and sends `OSRS-Price-Tracker/<version> (contact: …)`; it can be changed later from the Help tab. See `useragent.py`.
 - News: official OSRS RSS at `secure.runescape.com/m=news/latest_news.rss?oldschool=1`.
+- Ask AI: [Anthropic](https://platform.claude.com/docs), [OpenAI](https://developers.openai.com/api/docs), [OpenRouter](https://openrouter.ai/docs) or any OpenAI-compatible URL, with the user's own key, which is stored in the OS credential store (see `ai.py`). Until the user asks a question, the only requests to the chosen service are a check of a newly saved key and, for OpenRouter and OpenAI-compatible services, fetching the model list.
 
 ---
 

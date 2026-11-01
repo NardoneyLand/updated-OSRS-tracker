@@ -1,4 +1,7 @@
 requests
 beautifulsoup4
 lxml
+anthropic>=2.3
+openai>=3.42
+keyring
 pyinstaller

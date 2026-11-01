@@ -3,6 +3,16 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.1.0 — 2026-11-01
+
+**New**
+- Ask AI tab: ask for flip suggestions in plain English using your own
+  API key from Anthropic, OpenAI, OpenRouter, or any service with an
+  OpenAI-compatible API. The AI looks up live prices, flips, big movers,
+  your Watchlist, your alerts and the news before it answers. The service
+  bills your account for each question. See Help for setup and what gets
+  shared.
+
 ## 1.0.3 — 2026-10-31
 
 **New**

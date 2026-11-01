@@ -38,6 +38,9 @@ else:
 hidden = [
     "lxml.etree",
     "lxml._elementpath",
+    # keyring picks its backend at runtime.
+    "keyring.backends.Windows",
+    "keyring.backends.macOS",
 ]
 
 a = Analysis(
