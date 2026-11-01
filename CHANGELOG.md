@@ -3,6 +3,18 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.1 — 2026-11-01
+
+**Added**
+- Watchlist target prices. Select an item and click Set target to be alerted when
+  its Buy price falls to your target or its Sell price rises to it. Met targets
+  get a tick and a gold row, a count on the tab, and a taskbar flash.
+
+**Changed**
+- Search and its chart now show prices in full gp, such as 19,700 gp instead of
+  19.7K gp. If you prefer the short form, use the new Prices dropdown by the
+  search box.
+
 ## 1.4.0 — 2026-11-01
 
 **Changed**

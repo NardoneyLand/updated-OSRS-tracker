@@ -351,6 +351,7 @@ class MarketTools:
     def _get_my_tracker(self, args: dict) -> dict:
         capital = _user_capital()
         watched = db.watchlist_items()
+        targets = db.watchlist_targets()
         watchlist = []
         if watched:
             latest, bulk, _, bulk_5m = self._latest_market()
@@ -362,8 +363,16 @@ class MarketTools:
                                          capital,
                                          avg_5m=bulk_5m.get(str(item_id)))
                        if lt and item else None)
-                watchlist.append(_flip_summary(row) if row
-                                 else {"name": item_name, "verdict": "No price"})
+                entry = (_flip_summary(row) if row
+                         else {"name": item_name, "verdict": "No price"})
+                target = targets.get(item_id)
+                if target:
+                    entry["target_buy_at_or_below"] = target["target_below"]
+                    entry["target_sell_at_or_above"] = target["target_above"]
+                    entry["target_met"] = any(analyzer.target_hits(
+                        lt, target["target_below"], target["target_above"],
+                        time.time()))
+                watchlist.append(entry)
         now = time.time()
         return {
             "capital_gp": capital,

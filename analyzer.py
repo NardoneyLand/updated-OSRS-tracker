@@ -282,9 +282,27 @@ def parse_gp_amount(text: str) -> int:
     if mult:
         t = t[:-1]
     value = float(t) * (mult or 1)
-    if value < 0:
-        raise ValueError("negative amount")
+    if value < 0 or value == float("inf"):
+        raise ValueError("not an amount")
     return int(value)
+
+
+def target_hits(lt: Optional[dict], below: Optional[int], above: Optional[int],
+                now: float) -> Tuple[bool, bool]:
+    """Whether the latest prices meet a Watchlist item's targets, as (below, above).
+
+    `below` is compared with the Buy price (latest instant sell) and `above`
+    with the Sell price (latest instant buy), the same prices flip_row uses. A
+    side that hasn't traded for FLIP_MAX_AGE has no real price, so it can't
+    meet a target.
+    """
+    lt = lt or {}
+
+    def recent(side):
+        return now - (lt.get(f"{side}Time") or 0) <= FLIP_MAX_AGE
+
+    return (bool(below and lt.get("low") and lt["low"] <= below and recent("low")),
+            bool(above and lt.get("high") and lt["high"] >= above and recent("high")))
 
 
 def reversion_signal(current_mid: float, avg_mid: float) -> Tuple[str, float]:

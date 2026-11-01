@@ -45,6 +45,7 @@ ALERT_DEFAULT_INTERVAL = "1 min"
 ALERT_MIN_STALE = 300                   # see _alert_stale_after
 TRADE_AGE_TICK_MS = 30 * 1000           # keep "Last trade" ages counting up
 ALERT_COOLDOWN = 3600                   # re-alert an item after 1 hour
+MAX_GP = 2_147_483_647                  # the most gp a stack can hold
 ALERT_DEFAULT_THRESHOLD = 1_000_000     # est. profit, adjustable in 100K steps
 ALERT_THRESHOLD_STEPS = [f"{v:,}" for v in range(100_000, 100_000_001, 100_000)]
 TIMESERIES_STEP = "1h"
@@ -87,6 +88,7 @@ COLOR_PANEL_HI = "#3b2818"   # raised panel
 COLOR_BORDER   = "#5e3f1f"   # weathered wood border
 COLOR_ACCENT   = "#f0b32c"   # gold
 COLOR_ACCENT_HI = "#ffd87a"  # bright gold
+COLOR_TARGET_ROW = "#5a4012"  # a met target on the Watchlist
 COLOR_TEXT     = "#f4ead5"   # parchment cream
 COLOR_DIM      = "#9a8866"   # faded tan
 COLOR_GREEN    = "#7fbf3f"   # warmer green
@@ -128,6 +130,31 @@ def fmt_gp_exact(gp) -> str:
         return f"{int(gp):,}"
     except (TypeError, ValueError):
         return "N/A"
+
+
+def parse_targets(below_text: str, above_text: str) -> tuple:
+    """Typed target prices as (below, above), None where blank. Raises
+    ValueError with a message to show the user."""
+    targets = []
+    for text in (below_text, above_text):
+        try:
+            value = analyzer.parse_gp_amount(text)
+        except ValueError:
+            raise ValueError("Enter prices like 19,000, 19k or 1.5m.")
+        if value > MAX_GP:
+            raise ValueError(f"The most an item can cost is {MAX_GP:,} gp.")
+        targets.append(value or None)
+    below, above = targets
+    if below and above and below >= above:
+        raise ValueError("The Buy target must be lower than the Sell target.")
+    return below, above
+
+
+def fmt_target(target, hit, fmt) -> str:
+    """A target price for the table, ticked once the market has reached it."""
+    if not target:
+        return ""
+    return f"✓ {fmt(target)}" if hit else fmt(target)
 
 
 def fmt_age(seconds) -> str:
@@ -357,6 +384,18 @@ HELP_SECTIONS = [
      "market check (see Refresh on the Alerts tab), or when you click "
      "Refresh. Double-click "
      "a row to open the item in Search.\n\n"
+     "Target prices: select a row and click Set target to be told when the "
+     "item reaches a price. Buy ≤ watches for the Buy price falling to your "
+     "target, and Sell ≥ for the Sell price rising to it. Type 19,000, 19k "
+     "or 1.5m.\n"
+     "    •  A met target gets a ✓ and a gold row, the tab shows how many "
+     "items have one, e.g. Watchlist (1), and the taskbar flashes if the app "
+     "isn't in front.\n"
+     "    •  It's checked on the same timer as alerts, only while the app is "
+     "open, against the latest trade. One odd trade can meet a target, so check "
+     "the price before acting.\n"
+     "    •  A target stays set until you change it. If the price stays there, "
+     "or comes back within the hour, it won't flash again.\n\n"
      "Click a column header to sort (oldest added first to start); click "
      "again to reverse. Verdict sorts by rank, as on FlipRec."),
 
@@ -378,6 +417,9 @@ HELP_SECTIONS = [
      "    •  High buy / Low sell — the latest instant-buy and "
      "instant-sell prices.\n"
      "    •  Spread — the gap between them (before tax).\n"
+     "    •  Prices — the dropdown by the search box shows these and the "
+     "chart's prices as Exact (1,240) or Short (1.2K). It's separate from the "
+     "setting on FlipRec and Alerts.\n"
      "    •  Last trade — how long ago the older side last traded, and each "
      "side separately. ⏱ means over 5 minutes, so the prices may have "
      "moved.\n"
@@ -519,6 +561,7 @@ class OSRSTrackerApp:
         self._search_volume = None     # (frame, item_id, cells) showing the table
         self._search_trade = None      # (label, high time, low time)
         self._search_item = None       # item shown in the Search panel
+        self._search_shown = None      # what the panel was last drawn from
         self._lookup_seq = 0           # latest Search lookup (see _lookup_item)
         self._error_shown = False
         # Errors inside button clicks / timers: log them and tell the user
@@ -817,6 +860,10 @@ class OSRSTrackerApp:
         # dropdown on FlipRec and Alerts, also used by Watchlist.
         self.flip_format_var = tk.StringVar(
             value=settings.load().get("flip_price_format", PRICE_FORMATS[0]))
+        # Search has its own, so its full prices don't depend on how compact
+        # the tables are set to be.
+        self.search_format_var = tk.StringVar(
+            value=settings.load().get("search_price_format", PRICE_FORMATS[1]))
 
         self.search_tab = self._build_search_tab()
         self.ai_tab = self._build_ai_tab()
@@ -874,11 +921,14 @@ class OSRSTrackerApp:
         self.search_entry = ttk.Entry(bar, textvariable=self.search_var,
                                       state="disabled", width=50,
                                       font=FONT_BODY)
-        self.search_entry.pack(side="left", fill="x", expand=True)
+        self.search_entry.pack(side="left", fill="x", expand=True,
+                               padx=(0, 16))
         self.search_entry.bind("<KeyRelease>", self._on_search_keyrelease)
         self.search_entry.bind("<Down>", self._focus_dropdown)
         self.search_entry.bind("<Return>", self._on_search_enter)
         self.search_entry.bind("<Escape>", lambda _e: self._hide_dropdown())
+        self._price_format_picker(bar, self.search_format_var,
+                                  self._on_search_format_changed, trailing=0)
 
         # Dropdown listbox (always present, packed/unpacked as needed)
         self.dropdown_frame = ttk.Frame(frame)
@@ -924,6 +974,7 @@ class OSRSTrackerApp:
         self.history_range_btns = {}
         self._history_fetched = set()     # (item_id, step) pulled this session
         self._chart_rows = None           # rows for the item/range on screen
+        self._chart_font = tkfont.Font(font=FONT_SMALL)
         self._chart_view = None           # (t0, t1) when zoomed, else None
         self._chart_geom = None           # plot layout, for mouse handlers
         self._chart_drag = None           # (start x, view) while panning
@@ -1109,6 +1160,7 @@ class OSRSTrackerApp:
         run_async(fetch, done)
 
     def _render_message(self, text: str):
+        self._search_shown = None
         for child in self.result_frame.winfo_children():
             child.destroy()
         ttk.Label(self.result_frame, text=text,
@@ -1116,6 +1168,8 @@ class OSRSTrackerApp:
                   ).pack(expand=True, pady=20)
 
     def _render_result(self, item, price_data, trend, facts):
+        self._search_shown = {"item": item, "price_data": price_data,
+                              "trend": trend, "facts": facts}
         for child in self.result_frame.winfo_children():
             child.destroy()
 
@@ -1124,6 +1178,7 @@ class OSRSTrackerApp:
         low = price_data.get("low") or high
         spread = high - low
         spread_pct = (spread / low * 100) if low else 0
+        fmt = self._search_price_fmt()
 
         # Header
         header = ttk.Frame(self.result_frame, style="Inner.TFrame")
@@ -1142,9 +1197,9 @@ class OSRSTrackerApp:
         grid.pack(side="left", anchor="n")
 
         rows = [
-            ("High buy", f"{fmt_gp(high)} gp", COLOR_GREEN),
-            ("Low sell", f"{fmt_gp(low)} gp", COLOR_RED),
-            ("Spread",   f"{fmt_gp(spread)} gp  ({spread_pct:.1f}%)", COLOR_TEXT),
+            ("High buy", f"{fmt(high)} gp", COLOR_GREEN),
+            ("Low sell", f"{fmt(low)} gp", COLOR_RED),
+            ("Spread",   f"{fmt(spread)} gp  ({spread_pct:.1f}%)", COLOR_TEXT),
             ("Last trade", "", COLOR_TEXT),
             ("Price move", fmt_price_move(trend), COLOR_TEXT),
             ("Volume", fmt_volume_pace(facts), COLOR_TEXT),
@@ -1340,7 +1395,8 @@ class OSRSTrackerApp:
         interval_combo.bind("<<ComboboxSelected>>",
                             lambda _e: self._on_alert_interval_changed())
 
-        self._price_format_picker(bar)
+        self._price_format_picker(bar, self.flip_format_var,
+                                  self._on_price_format_changed)
 
         self.alerts_check_btn = ttk.Button(
             bar, text="Check now", command=self._monitor_tick)
@@ -1456,6 +1512,7 @@ class OSRSTrackerApp:
             new, expired = self._evaluate_alerts()
             self._render_alerts()
             self._render_watchlist()
+            self._notify_targets()
             stamp = time.strftime("%H:%M:%S", time.localtime(self._market[2]))
             self.alerts_status.set(
                 f"Prices updated {stamp} · {new} new · {expired} expired · "
@@ -1573,17 +1630,19 @@ class OSRSTrackerApp:
 
     WATCH_COLUMNS = [
         # (tree id, header, sort key, width, anchor, descending on 1st click)
-        ("item",    "Item",        "name",    220, "w",      False),
-        ("buy",     "Buy (gp)",    "buy",     95,  "e",      True),
-        ("sell",    "Sell (gp)",   "sell",    95,  "e",      True),
-        ("net",     "Net / item",  "net",     90,  "e",      True),
-        ("roi",     "ROI",         "roi",     65,  "e",      True),
-        ("volume",  "Vol 1h",      "volume",  80,  "e",      True),
-        ("vol_12h", "12h",         "vol_12h", 70,  "e",      True),
-        ("vol_24h", "24h",         "vol_24h", 75,  "e",      True),
-        ("age",     "Last trade",  "age",     90,  "e",      False),
-        ("verdict", "Verdict",     "verdict", 110, "center", True),
-        ("added",   "Added",       "added",   100, "w",      True),
+        ("item",    "Item",        "name",    171, "w",      False),
+        ("buy",     "Buy (gp)",    "buy",     88,  "e",      True),
+        ("sell",    "Sell (gp)",   "sell",    88,  "e",      True),
+        ("target_below", "Buy ≤",  "target_below", 100, "e", True),
+        ("target_above", "Sell ≥", "target_above", 100, "e", True),
+        ("net",     "Net / item",  "net",     88,  "e",      True),
+        ("roi",     "ROI",         "roi",     55,  "e",      True),
+        ("volume",  "Vol 1h",      "volume",  72,  "e",      True),
+        ("vol_12h", "12h",         "vol_12h", 72,  "e",      True),
+        ("vol_24h", "24h",         "vol_24h", 72,  "e",      True),
+        ("age",     "Last trade",  "age",     88,  "e",      False),
+        ("verdict", "Verdict",     "verdict", 85,  "center", True),
+        ("added",   "Added",       "added",   78,  "w",      True),
     ]
 
     def _build_watchlist_tab(self) -> ttk.Frame:
@@ -1595,7 +1654,12 @@ class OSRSTrackerApp:
                    command=self._monitor_tick
                    ).pack(side="left", padx=(0, 8))
         ttk.Button(bar, text="Remove selected",
-                   command=self._remove_selected_watch).pack(side="left")
+                   command=self._remove_selected_watch
+                   ).pack(side="left", padx=(0, 8))
+        self.watch_target_btn = ttk.Button(bar, text="Set target…",
+                                           state="disabled",
+                                           command=self._target_dialog)
+        self.watch_target_btn.pack(side="left")
         ttk.Label(bar, text="Add items with the ☆ button on a Search result.",
                   style="Dim.TLabel").pack(side="left", padx=12)
         self.watch_note = tk.StringVar(value="")
@@ -1612,10 +1676,13 @@ class OSRSTrackerApp:
         tree.tag_configure("warn", foreground=COLOR_YELLOW)
         tree.tag_configure("bad", foreground=COLOR_RED)
         tree.tag_configure("dim", foreground=COLOR_DIM)
+        tree.tag_configure("target", foreground=COLOR_ACCENT_HI,
+                           background=COLOR_TARGET_ROW)
         tree.pack(fill="both", expand=True, padx=20, pady=(0, 10))
         tree.bind("<Double-Button-1>",
                   lambda _e: self._open_selected_in_search(
                       self.watch_tree, self.watch_id_map))
+        tree.bind("<<TreeviewSelect>>", self._on_watch_selected)
         self.watch_tree = tree
         self.watch_id_map = {}
         # Kept across refreshes; oldest added first until a header is clicked.
@@ -1626,8 +1693,9 @@ class OSRSTrackerApp:
                   text=("Prices refresh with every market check (see Refresh "
                         "on the Alerts tab) or when you click Refresh here. "
                         "Margins use the "
-                        "same maths as FlipRec. Double-click a row to open "
-                        "it in Search."),
+                        "same maths as FlipRec. Select a row and click Set "
+                        "target to be alerted at a price. Double-click a row "
+                        "to open it in Search."),
                   style="Dim.TLabel", wraplength=1000, justify="center"
                   ).pack(pady=(0, 10))
         return frame
@@ -1642,6 +1710,11 @@ class OSRSTrackerApp:
         self.watch_note.set(self._volume_note(
             [seconds for _l, seconds in volume.WINDOWS]))
         items = db.watchlist_items()
+        targets = db.watchlist_targets()
+        hits = self._target_hits(targets)
+        met = sum(any(h) for h in hits.values())
+        self.notebook.tab(self.watchlist_tab,
+                          text=f"Watchlist ({met})" if met else "Watchlist")
         if not items:
             tree.insert("", "end", values=(
                 "Your watchlist is empty. Search an item and click "
@@ -1664,18 +1737,25 @@ class OSRSTrackerApp:
                 if row:        # None if a side has no price yet
                     row["vol_12h"] = self._volume.slower_side(item_id, 12 * 3600)
                     row["vol_24h"] = self._volume.slower_side(item_id, 24 * 3600)
+                    row["target_below"] = targets.get(item_id, {}).get("target_below")
+                    row["target_above"] = targets.get(item_id, {}).get("target_above")
             entries.append((item_id, name, added, row))
 
         for item_id, name, added, row in self._sorted_watch_entries(entries):
             added_s = time.strftime("%m/%d %H:%M", time.localtime(added))
+            target = targets.get(item_id, {})
+            hit_below, hit_above = hits.get(item_id, (False, False))
+            below = fmt_target(target.get("target_below"), hit_below, fmt)
+            above = fmt_target(target.get("target_above"), hit_above, fmt)
             if row is None:
-                values = (name, "…" if not self._market else "N/A",
-                          *[""] * (len(self.WATCH_COLUMNS) - 3), added_s)
+                values = (name, "…" if not self._market else "N/A", "",
+                          below, above,
+                          *[""] * (len(self.WATCH_COLUMNS) - 6), added_s)
                 tag = "dim"
             else:
                 values = (
-                    name, fmt(row["buy"]), fmt(row["sell"]), fmt(row["net"]),
-                    f"{row['roi']:.1f}%",
+                    name, fmt(row["buy"]), fmt(row["sell"]), below, above,
+                    fmt(row["net"]), f"{row['roi']:.1f}%",
                     self._volume_text(item_id, row["volume"], fmt),
                     self._window_text(row["vol_12h"], 12 * 3600, fmt),
                     self._window_text(row["vol_24h"], 24 * 3600, fmt),
@@ -1686,6 +1766,8 @@ class OSRSTrackerApp:
                 tag = {"Profitable": "good", "Marginal": "warn",
                        "Suspect": "warn", "Unprofitable": "bad"}.get(
                            row["verdict"], "dim")
+            if hit_below or hit_above:
+                tag = "target"
             iid = tree.insert("", "end", values=values, tags=(tag,))
             self.watch_id_map[iid] = item_id
             if row:
@@ -1726,6 +1808,123 @@ class OSRSTrackerApp:
             self.watch_tree.heading(
                 cid, text=label + (arrow if k == key else ""))
 
+    def _target_hits(self, targets: dict) -> dict:
+        """{item_id: (below met, above met)} from the last market check."""
+        if not targets or not self._market:
+            return {}
+        latest, _bulk, fetched_at, _bulk_5m = self._market
+        if time.time() - fetched_at > self._alert_stale_after():
+            return {}                  # too old to trust, as with alerts
+        return {item_id: analyzer.target_hits(
+                    latest.get(str(item_id)), t["target_below"],
+                    t["target_above"], fetched_at)
+                for item_id, t in targets.items()}
+
+    def _notify_targets(self, quiet: bool = False):
+        """Flash when a target is newly met. One that stays met, or comes back
+        within the hour after a price bounces around it, doesn't flash again."""
+        targets = db.watchlist_targets()
+        now = time.time()
+        seen, fresh = [], False
+        for item_id, hit in self._target_hits(targets).items():
+            for side, met in zip(("below", "above"), hit):
+                if met:
+                    seen.append((item_id, side))
+                    last = targets[item_id][f"{side}_seen"] or 0
+                    fresh = fresh or now - last >= ALERT_COOLDOWN
+        db.watchlist_mark_seen(seen, now)
+        if fresh and not quiet:
+            flash_window(self.root)
+
+    def _on_watch_selected(self, _event=None):
+        chosen = any(iid in self.watch_id_map
+                     for iid in self.watch_tree.selection())
+        self.watch_target_btn.config(state="normal" if chosen else "disabled")
+
+    def _target_dialog(self):
+        """Dialog to set the selected Watchlist item's target prices."""
+        item_id = next((self.watch_id_map[iid]
+                        for iid in self.watch_tree.selection()
+                        if iid in self.watch_id_map), None)
+        if item_id is None:
+            return
+        name = next(n for i, n, _a in db.watchlist_items() if i == item_id)
+        target = db.watchlist_targets().get(item_id, {})
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Target prices")
+        dlg.configure(bg=COLOR_BG)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+
+        body = ttk.Frame(dlg)
+        body.pack(fill="both", expand=True, padx=24, pady=20)
+        ttk.Label(body, text=name, style="Header.TLabel"
+                  ).pack(anchor="w", pady=(0, 10))
+        ttk.Label(body, wraplength=400, justify="left", text=(
+            "You get the tab count and taskbar flash when the latest trade "
+            "reaches a target. Leave a box blank for no target.")
+                  ).pack(anchor="w", pady=(0, 12))
+
+        latest = (self._market or ({},))[0].get(str(item_id)) or {}
+        grid = ttk.Frame(body)
+        grid.pack(anchor="w")
+        fields = []
+        for i, (label, key, price) in enumerate((
+                ("Alert when Buy is at or below:", "target_below", latest.get("low")),
+                ("Alert when Sell is at or above:", "target_above", latest.get("high")))):
+            ttk.Label(grid, text=label, style="TLabel"
+                      ).grid(row=i, column=0, sticky="w", padx=(0, 10), pady=4)
+            var = tk.StringVar(value=fmt_gp_exact(target[key])
+                               if target.get(key) else "")
+            ttk.Entry(grid, textvariable=var, width=16
+                      ).grid(row=i, column=1, pady=4)
+            ttk.Label(grid, style="Dim.TLabel",
+                      text=f"now {fmt_gp_exact(price)}" if price else ""
+                      ).grid(row=i, column=2, sticky="w", padx=(10, 0))
+            fields.append(var)
+        grid.winfo_children()[1].focus_set()
+
+        error = tk.StringVar()
+        tk.Label(body, textvariable=error, bg=COLOR_BG, fg=COLOR_RED,
+                 font=FONT_BODY, wraplength=400, justify="left"
+                 ).pack(anchor="w", pady=(6, 0))
+
+        def close(_e=None):
+            dlg.destroy()
+
+        def apply(below, above):
+            db.watchlist_set_targets(item_id, below, above)
+            self._notify_targets(quiet=True)  # already met: nothing to flash for
+            self._render_watchlist()
+            close()
+
+        def save(_e=None):
+            try:
+                below, above = parse_targets(fields[0].get(), fields[1].get())
+            except ValueError as exc:
+                error.set(str(exc))
+                return
+            apply(below, above)
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(10, 0))
+        ttk.Button(buttons, text="Cancel", command=close).pack(side="right")
+        ttk.Button(buttons, text="Save", command=save
+                   ).pack(side="right", padx=(0, 8))
+        if target:
+            ttk.Button(buttons, text="Clear targets",
+                       command=lambda: apply(None, None)).pack(side="left")
+        dlg.bind("<Return>", save)
+        dlg.bind("<Escape>", close)
+
+        dlg.update_idletasks()
+        x = (dlg.winfo_screenwidth() - dlg.winfo_reqwidth()) // 2
+        y = (dlg.winfo_screenheight() - dlg.winfo_reqheight()) // 3
+        dlg.geometry(f"+{x}+{y}")
+        dlg.grab_set()
+        dlg.lift()
+
     def _remove_selected_watch(self):
         for iid in self.watch_tree.selection():
             item_id = self.watch_id_map.get(iid)
@@ -1760,16 +1959,20 @@ class OSRSTrackerApp:
         return (fmt_gp_exact if self.flip_format_var.get().startswith("Exact")
                 else fmt_gp)
 
-    def _price_format_picker(self, bar):
+    def _search_price_fmt(self):
+        """Price formatter chosen in the Prices dropdown on Search."""
+        return (fmt_gp_exact if self.search_format_var.get().startswith("Exact")
+                else fmt_gp)
+
+    def _price_format_picker(self, bar, var, on_change, trailing=16):
         """'Prices:' dropdown. FlipRec and Alerts share one setting, so
-        changing either updates both."""
+        changing either updates both; Search has its own."""
         ttk.Label(bar, text="Prices:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
-        combo = ttk.Combobox(bar, textvariable=self.flip_format_var,
+        combo = ttk.Combobox(bar, textvariable=var,
                              state="readonly", width=14, values=PRICE_FORMATS)
-        combo.pack(side="left", padx=(0, 16))
-        combo.bind("<<ComboboxSelected>>",
-                   lambda _e: self._on_price_format_changed())
+        combo.pack(side="left", padx=(0, trailing))
+        combo.bind("<<ComboboxSelected>>", lambda _e: on_change())
 
     def _on_price_format_changed(self):
         settings.save({"flip_price_format": self.flip_format_var.get()})
@@ -1778,6 +1981,13 @@ class OSRSTrackerApp:
             self._render_fliprec_table()
         self._render_alerts()
         self._render_watchlist()
+
+    def _on_search_format_changed(self):
+        settings.save({"search_price_format": self.search_format_var.get()})
+        # Only the display changes, so redraw without fetching anything.
+        if self._search_shown:
+            self._render_result(**self._search_shown)
+        self._draw_history_chart()
 
     def _open_selected_in_search(self, tree, id_map):
         sel = tree.selection()
@@ -2022,7 +2232,8 @@ class OSRSTrackerApp:
                         command=self._apply_flip_filters
                         ).pack(side="left", padx=(0, 16))
 
-        self._price_format_picker(bar)
+        self._price_format_picker(bar, self.flip_format_var,
+                                  self._on_price_format_changed)
 
         ttk.Label(bar, text="Show:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
@@ -2146,6 +2357,7 @@ class OSRSTrackerApp:
             flash_window(self.root)
         self._render_alerts()
         self._render_watchlist()
+        self._notify_targets()
 
     def _sort_fliprec(self, key: str, default_desc: bool):
         cur_key, cur_desc = self.flip_sort
@@ -2448,12 +2660,6 @@ class OSRSTrackerApp:
             return
         W, H = size
 
-        ML, MR, MT, MB = 70, 30, 40, 60
-        plot_w = W - ML - MR
-        plot_h = H - MT - MB
-        if plot_w < 10 or plot_h < 10:
-            return
-
         times = [ts for _h, _l, ts in history]
         full_min, full_max = times[0], times[-1]
         t_min, t_max = self._chart_view or (full_min, full_max)
@@ -2479,6 +2685,22 @@ class OSRSTrackerApp:
         if y_max == y_min:
             pad = max(1, y_max * 0.05)
             y_min, y_max = y_min - pad, y_max + pad
+        grid_vals = [y_min + (y_max - y_min) * (i / 4) for i in range(5)]
+
+        # Y labels in the chosen format, or exact gp when zoomed in so far that
+        # the short labels would repeat (e.g. "1.1K" twice).
+        fmt = self._search_price_fmt()
+        y_labels = [fmt(round(v)) for v in grid_vals]
+        if len(set(y_labels)) < len(y_labels):
+            y_labels = [fmt_gp_exact(round(v)) for v in grid_vals]
+
+        # Full prices can be wider than the usual margin.
+        widest = max(self._chart_font.measure(t) for t in y_labels)
+        ML, MR, MT, MB = max(70, widest + 16), 30, 40, 60
+        plot_w = W - ML - MR
+        plot_h = H - MT - MB
+        if plot_w < 10 or plot_h < 10:
+            return
 
         c = self.history_canvas
         c.delete("all")
@@ -2498,7 +2720,6 @@ class OSRSTrackerApp:
             return MT + plot_h - ((v - y_min) / (y_max - y_min)) * plot_h
 
         # Y gridlines
-        grid_vals = [y_min + (y_max - y_min) * (i / 4) for i in range(5)]
         for v in grid_vals:
             y = y_pos(v)
             c.create_line(ML, y, ML + plot_w, y,
@@ -2540,11 +2761,7 @@ class OSRSTrackerApp:
         c.create_line(ML, MT, ML, MT + plot_h, fill=COLOR_DIM)
         c.create_line(ML, MT + plot_h, ML + plot_w, MT + plot_h, fill=COLOR_DIM)
 
-        # Y labels: short form, or exact gp when zoomed in so far that the
-        # short labels would repeat (e.g. "1.1K" twice).
-        y_labels = [fmt_gp(int(v)) for v in grid_vals]
-        if len(set(y_labels)) < len(y_labels):
-            y_labels = [fmt_gp_exact(round(v)) for v in grid_vals]
+        # Y labels
         for v, text in zip(grid_vals, y_labels):
             c.create_text(ML - 8, y_pos(v), text=text,
                           fill=COLOR_DIM, anchor="e", font=FONT_SMALL)

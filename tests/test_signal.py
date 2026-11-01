@@ -157,6 +157,55 @@ def scenario():
         check(any(t.startswith("Up ") and "over" in t and "hours" in t for t in shown), "price move shows")
         check(any("partly reverse" in t for t in shown), "the reversal note shows")
         check(any("Worth knowing" in t for t in shown), "under Worth knowing")
+        check("2,000,000 gp" in shown, f"high buy shows full gp: {shown}")
+        check("1,900,000 gp" in shown, f"low sell shows full gp: {shown}")
+        check("100,000 gp  (5.3%)" in shown, f"spread shows full gp: {shown}")
+
+        # The Prices dropdown on Search changes the panel and chart, and nothing else
+        def chart_labels():
+            canvas = app.history_canvas
+            return [canvas.itemcget(i, "text") for i in canvas.find_all()
+                    if canvas.type(i) == "text" and canvas.itemcget(i, "anchor") == "e"]
+
+        def labels_fit():
+            canvas = app.history_canvas
+            return all(canvas.bbox(i)[0] >= 0 for i in canvas.find_all()
+                       if canvas.type(i) == "text" and canvas.itemcget(i, "anchor") == "e")
+
+        tables_before = app.flip_format_var.get()
+        app.notebook.select(app.search_tab)
+        root.geometry("1250x860")
+        settle(lambda: False, 0.3)
+        app._draw_history_chart()
+        settle(lambda: False, 0.2)
+        check(len(chart_labels()) == 5, f"chart has its price labels: {chart_labels()}")
+        check("2,000,000" in chart_labels(), f"chart shows full gp by default: {chart_labels()}")
+        check(labels_fit(), "full chart prices fit inside the chart")
+        fetches = len(calls)
+        app.search_format_var.set(gui.PRICE_FORMATS[0])
+        app._on_search_format_changed()
+        settle(lambda: False, 0.2)
+        shown = texts(app.result_frame)
+        check("2.00M gp" in shown and "1.90M gp" in shown, f"Short changes the panel prices: {shown}")
+        check("100.0K gp  (5.3%)" in shown, f"Short changes the spread: {shown}")
+        check("2.00M" in chart_labels() and "2,000,000" not in chart_labels(), f"Short changes the chart: {chart_labels()}")
+        check(any(t == "Price move" for t in shown), "the rest of the panel stays")
+        check(len(calls) == fetches, "changing the format fetches nothing")
+        check(settings.load().get("search_price_format") == gui.PRICE_FORMATS[0], "the choice is saved")
+        check(app.flip_format_var.get() == tables_before, "the FlipRec and Alerts setting is separate")
+        app.search_format_var.set(gui.PRICE_FORMATS[1])
+        app._on_search_format_changed()
+        settle(lambda: False, 0.2)
+        check("2,000,000 gp" in texts(app.result_frame), "Exact brings the full prices back")
+        check("2,000,000" in chart_labels(), f"Exact brings the full chart back: {chart_labels()}")
+
+        # Only the setting is drawn while a new search is loading
+        app._render_message("Fetching something")
+        app._on_search_format_changed()
+        settle(lambda: False, 0.1)
+        check("Fetching something" in texts(app.result_frame), "changing the format doesn't bring back the old item")
+        app._lookup_item(MAPPING[0])
+        settle(lambda: any("Price move" == t for t in texts(app.result_frame)))
 
         # Chart buttons and notes stay whole at normal and narrower widths
         def cut_off(w, found):

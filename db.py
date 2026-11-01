@@ -94,6 +94,13 @@ def initialize_db():
     if "volume" not in cols:
         c.execute("ALTER TABLE profit_alerts ADD COLUMN volume INTEGER")
 
+    # Migration: Watchlist target prices. *_seen = when that target was last
+    # found met, so one that stays met or returns soon doesn't alert again.
+    cols = [r[1] for r in c.execute("PRAGMA table_info(watchlist)")]
+    for col in ("target_below", "target_above", "below_seen", "above_seen"):
+        if col not in cols:
+            c.execute(f"ALTER TABLE watchlist ADD COLUMN {col} INTEGER")
+
     # Migration: the old "moved 10% since your last search" alerts were
     # replaced by profit alerts (profit_alerts).
     c.execute("DROP TABLE IF EXISTS alerts")
@@ -378,6 +385,39 @@ def watchlist_items() -> List[Tuple]:
         "ORDER BY added_ts").fetchall()
     conn.close()
     return [tuple(r) for r in rows]
+
+
+def watchlist_targets() -> dict:
+    """{item_id: row} for the watched items with a target price set."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT item_id, target_below, target_above, below_seen, above_seen "
+        "FROM watchlist "
+        "WHERE target_below IS NOT NULL OR target_above IS NOT NULL").fetchall()
+    conn.close()
+    return {r["item_id"]: dict(r) for r in rows}
+
+
+def watchlist_set_targets(item_id: int, below: Optional[int], above: Optional[int]):
+    """Replace an item's target prices. None means no target on that side."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE watchlist SET target_below = ?, target_above = ?, "
+        "below_seen = NULL, above_seen = NULL WHERE item_id = ?",
+        (below, above, item_id))
+    conn.commit()
+    conn.close()
+
+
+def watchlist_mark_seen(seen: List[Tuple], ts: float):
+    """Record (item_id, "below" or "above") targets as met at ts."""
+    conn = get_connection()
+    for item_id, side in seen:
+        column = {"below": "below_seen", "above": "above_seen"}[side]
+        conn.execute(f"UPDATE watchlist SET {column} = ? WHERE item_id = ?",
+                     (int(ts), item_id))
+    conn.commit()
+    conn.close()
 
 
 # ── News cache ────────────────────────────────────────────────────────────────
