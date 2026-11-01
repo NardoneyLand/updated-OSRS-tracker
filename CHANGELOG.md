@@ -3,6 +3,20 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.3.2 — 2026-11-01
+
+**Fixed**
+- A Watchlist item with only one price no longer breaks the Watchlist and the
+  Alerts status.
+- Ask AI on OpenAI-compatible services now always stops at its lookup limit,
+  even if the service ignores the request to stop.
+- After an outage or the PC sleeping, changing a filter no longer brings alerts
+  back on old prices.
+- A failed volume fetch no longer shows every item on FlipRec as Inactive.
+- An empty Ask AI reply no longer breaks the rest of the conversation, and a
+  reply cut off by a dropped connection now says so.
+- Items with no price history no longer claim the price is stable.
+
 ## 1.3.1 — 2026-11-01
 
 **Fixed**

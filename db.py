@@ -328,6 +328,14 @@ def load_volume_buckets() -> List[Tuple]:
     return [tuple(r) for r in rows]
 
 
+def delete_volume_bucket(step: str, start: int):
+    conn = get_connection()
+    conn.execute("DELETE FROM volume_buckets WHERE step = ? AND start = ?",
+                 (step, start))
+    conn.commit()
+    conn.close()
+
+
 def delete_volume_buckets_before(step: str, cutoff: int):
     conn = get_connection()
     conn.execute("DELETE FROM volume_buckets WHERE step = ? AND start < ?",

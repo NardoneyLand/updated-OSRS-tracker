@@ -65,6 +65,17 @@ def _trim(data: dict) -> dict:
             for item_id, e in data.items()}
 
 
+def _parse_saved(text: str) -> dict:
+    """A saved period, back in trimmed form. Raises if it's damaged."""
+    period = {}
+    for item_id, entry in json.loads(text).items():
+        if len(entry) != 4 or not all(v is None or isinstance(v, (int, float))
+                                      for v in entry):
+            raise ValueError("bad entry")
+        period[sys.intern(item_id)] = tuple(entry)
+    return period
+
+
 def _merge(buckets: List[dict]) -> dict:
     """Add periods together: total volume, and average prices by volume."""
     totals = {}
@@ -114,16 +125,22 @@ class VolumeHistory:
 
     def view(self, seconds: int) -> Optional[dict]:
         """A rolling window, or None if it isn't complete and recent."""
-        found = self._views.get(seconds)
-        if not found:
-            return None
-        data, end, _partial = found
-        limit = MAX_END_AGE.get(seconds, MAX_END_AGE_LONG)
-        return data if time.time() - end <= limit else None
+        found = self._current(seconds)
+        return found[0] if found else None
 
     def is_partial(self, seconds: int) -> bool:
         """True if a ready window is missing a period, so it reads a bit low."""
-        return self.view(seconds) is not None and self._views[seconds][2]
+        found = self._current(seconds)
+        return bool(found and found[2])
+
+    def _current(self, seconds: int) -> Optional[tuple]:
+        """(view, end, partial) if ready. Reads _views only once, because the
+        background thread can swap in new ones at any moment."""
+        found = self._views.get(seconds)
+        if not found:
+            return None
+        limit = MAX_END_AGE.get(seconds, MAX_END_AGE_LONG)
+        return found if time.time() - found[1] <= limit else None
 
     def averages(self, step: str) -> dict:
         """
@@ -191,11 +208,10 @@ class VolumeHistory:
         for step, start, text in db.load_volume_buckets():
             try:
                 if step in self._buckets:
-                    self._buckets[step][start] = {
-                        sys.intern(k): tuple(v)
-                        for k, v in json.loads(text).items()}
-            except (ValueError, TypeError):
-                applog.log.warning(f"Skipping a damaged {step} volume period")
+                    self._buckets[step][start] = _parse_saved(text)
+            except (ValueError, TypeError, AttributeError):
+                applog.log.warning(f"Discarding a damaged {step} volume period")
+                db.delete_volume_bucket(step, start)
         self._prune()
         self._rebuild()
         self._notify()

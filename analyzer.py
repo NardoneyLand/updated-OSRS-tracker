@@ -119,8 +119,10 @@ def get_prediction(trend: dict, timeseries: list) -> dict:
     elif direction == "falling":
         score -= 1
         reasons.append(f"Price is trending downward ({pct_change:+.1f}% vs history)")
-    else:
+    elif direction == "stable":
         reasons.append("Price is relatively stable in recent history")
+    else:
+        reasons.append("Not enough price history to judge the trend")
 
     # Volume
     if vol_label == "high":

@@ -1481,6 +1481,10 @@ class OSRSTrackerApp:
             # Without volumes every item looks inactive: that isn't a reason
             # to expire every alert.
             return 0, 0
+        if time.time() - fetched_at > self._alert_stale_after():
+            # Too old to trust, as after an outage or the PC sleeping. A changed
+            # filter mustn't bring alerts back on these prices.
+            return 0, 0
         rows = analyzer.find_flips(
             latest, bulk, self.item_data,
             capital=self._flip_capital() or 0,
@@ -1491,7 +1495,7 @@ class OSRSTrackerApp:
             [r for r in rows
              if r["active"] and not r["slow"] and r["verdict"] != "Suspect"
              and r["profit"] >= threshold],
-            ALERT_COOLDOWN)
+            ALERT_COOLDOWN, fetched_at)
 
     def _tree_view_state(self, tree, id_map) -> tuple:
         """What to put back after a redraw, so a timed refresh doesn't lose
@@ -1664,8 +1668,9 @@ class OSRSTrackerApp:
                                         bulk.get(str(item_id)), capital,
                                         now=fetched_at,
                                         avg_5m=bulk_5m.get(str(item_id)))
-                row["vol_12h"] = self._volume.slower_side(item_id, 12 * 3600)
-                row["vol_24h"] = self._volume.slower_side(item_id, 24 * 3600)
+                if row:        # None if a side has no price yet
+                    row["vol_12h"] = self._volume.slower_side(item_id, 12 * 3600)
+                    row["vol_24h"] = self._volume.slower_side(item_id, 24 * 3600)
             entries.append((item_id, name, added, row))
 
         for item_id, name, added, row in self._sorted_watch_entries(entries):
@@ -2107,7 +2112,8 @@ class OSRSTrackerApp:
 
         def done(payload, err):
             self.flip_refresh_btn.config(state="normal")
-            if err or not payload or not payload[0]:
+            if err or not payload or not payload[0] or not payload[1]:
+                # Without volumes every item would look Inactive.
                 self.flip_status.set(
                     f"Error: {err}" if err else "Could not fetch prices.")
                 return

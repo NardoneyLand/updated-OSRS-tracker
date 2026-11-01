@@ -309,6 +309,10 @@ class Chat:
 
 
 NOTICE_CUT_OFF = "The reply hit the length limit and was cut off."
+NOTICE_ENDED_EARLY = ("The connection ended before the reply finished, so it may "
+                      "be incomplete.")
+NOTICE_RETRIED = ("One attempt came through garbled and was retried. The token "
+                  "count leaves that attempt out.")
 NOTICE_TOOL_LIMIT = ("The AI reached its lookup limit for one question, so this "
                      "answer uses only the data it had so far.")
 
@@ -329,6 +333,7 @@ def _anthropic_turn(chat: Chat, api_key: str, messages: list, on_text, on_status
     tokens = 0
     notice = ""
     malformed = 0
+    retried = False
     rounds = 0
     while True:
         rounds += 1
@@ -367,6 +372,10 @@ def _anthropic_turn(chat: Chat, api_key: str, messages: list, on_text, on_status
             if malformed > MALFORMED_STREAM_RETRIES:
                 raise AIError("Anthropic sent a response that could not be "
                               "read. Try again.")
+            # Its text is already on screen, so say why more is coming.
+            on_text("\n\n(That came through garbled, so the AI is trying "
+                    "again.)\n\n")
+            retried = True
             rounds -= 1
             continue
         malformed = 0
@@ -386,10 +395,15 @@ def _anthropic_turn(chat: Chat, api_key: str, messages: list, on_text, on_status
             if tool_uses:     # a cut-off tool call must not be run or kept
                 raise AIError(NOTICE_CUT_OFF + " Try a narrower question.")
             notice = NOTICE_CUT_OFF
+        if not tool_uses and not any(b["type"] == "text" for b in content):
+            raise AIError("Anthropic sent back an empty reply. Try again or "
+                          "pick another model.")
         messages.append({"role": "assistant", "content": content})
         if not tool_uses:
             if final_round and not notice:
                 notice = NOTICE_TOOL_LIMIT
+            if retried and not notice:
+                notice = NOTICE_RETRIED
             return {"tokens": tokens, "notice": notice}
 
         results = []
@@ -415,6 +429,8 @@ def _echoable_content(blocks: list) -> list:
     for index, block in enumerate(blocks):
         if block.type == "fallback":
             continue
+        if block.type == "text" and not block.text:
+            continue           # the API rejects empty text when it's sent back
         if index > last_switch or block.type == "text":
             kept.append(block.to_dict())
     return kept
@@ -488,7 +504,19 @@ def _openai_turn(chat: Chat, api_key: str, messages: list, on_text, on_status,
         if response.status == "incomplete":
             if calls:         # a cut-off tool call must not be run or kept
                 raise AIError(NOTICE_CUT_OFF + " Try a narrower question.")
-            notice = NOTICE_CUT_OFF
+            details = response.incomplete_details
+            notice = ("OpenAI's content filter stopped this reply."
+                      if details and details.reason == "content_filter"
+                      else NOTICE_CUT_OFF)
+        if not calls and not any(item.type == "message"
+                                 for item in response.output):
+            # Only hidden reasoning, say: nothing to show, and it can't be
+            # sent back on its own.
+            raise AIError(("The reply hit the length limit before saying "
+                           "anything. Try a narrower question."
+                           if notice else
+                           "OpenAI sent back an empty reply. Try again or pick "
+                           "another model."))
         messages.extend(item.model_dump(mode="json", by_alias=True,
                                         exclude_unset=True)
                         for item in response.output)
@@ -567,7 +595,21 @@ def _compatible_turn(chat: Chat, api_key: str, messages: list, on_text, on_statu
             notice = NOTICE_CUT_OFF
         elif reply["finish"] == "content_filter":
             notice = f"{name}'s content filter stopped this reply."
-        if not reply["text"] and not calls and not notice:
+        elif reply["finish"] is None:
+            if calls:         # may be half-received: must not be run or kept
+                raise AIError(f"The connection to {name} ended before the "
+                              "reply finished. Try again.")
+            notice = NOTICE_ENDED_EARLY
+        if final_round and calls:
+            # The service ignored tool_choice. Stop here, because every extra
+            # round is on the user's bill. The calls can't be kept unanswered.
+            calls = []
+            if not reply["text"]:
+                raise AIError(f"The model on {name} kept asking for more data "
+                              "instead of answering. Try another model.")
+            notice = NOTICE_TOOL_LIMIT
+        if not reply["text"] and not calls and (not notice
+                                                or notice == NOTICE_ENDED_EARLY):
             raise AIError(f"{name} sent back an empty reply. Try again or "
                           "pick another model.")
 

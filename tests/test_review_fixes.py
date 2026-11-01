@@ -314,6 +314,8 @@ def scenario():
         settle(lambda: app.item_data)
         settle(lambda: 24 * 3600 in app._volume.ready_windows(), 20)
         settle(lambda: app._volume_ready == app._volume.ready_windows())
+        app._monitor_tick()   # the first check may have run before the history was ready
+        settle()
         check(app.status_var.get() == "2 items loaded.", "#3 header back to normal after the download: " + app.status_var.get())
 
         # #7 No saved volume isn't zero
