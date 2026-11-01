@@ -3,6 +3,23 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.3.0 — 2026-11-01
+
+**New**
+- See how much of an item really traded in the last 1, 12 and 24 hours. Search
+  splits it into instant buys and instant sells, and Watchlist has a column for
+  each.
+- FlipRec and Alerts show Vol 1h, with ▲ when an item is trading at least 3x
+  its usual hour and ▼ when it's under half.
+
+**Fixed**
+- Volume and averages are now up to date. The "last hour" could be nearly two
+  hours old, and Volatile's 24h window could be nearly two days old. Volatile's
+  percentages and some verdicts may look different because of this.
+
+The first launch downloads a day of market data in the background, which takes
+about a minute. Until then the 12h and 24h numbers and the arrows stay blank.
+
 ## 1.2.0 — 2026-11-01
 
 **New**

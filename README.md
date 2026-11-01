@@ -132,6 +132,7 @@ search.py           Fuzzy item search
 analyzer.py         Trend, alert, prediction, volatility logic
 ai.py               Ask AI: API keys and the chat loops for each kind of API
 aitools.py          Ask AI: the read-only data lookups the AI can call
+volume.py           Rolling 1h / 12h / 24h volumes built from the Wiki's bulk data
 scraper.py          OSRS news RSS scraper
 paths.py            Resolves writable data directory (dev vs. bundled)
 

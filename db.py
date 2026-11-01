@@ -66,6 +66,13 @@ def initialize_db():
 
         CREATE INDEX IF NOT EXISTS idx_price_item
             ON price_history (item_id, timestamp);
+
+        CREATE TABLE IF NOT EXISTS volume_buckets (
+            step  TEXT    NOT NULL,
+            start INTEGER NOT NULL,
+            data  TEXT    NOT NULL,
+            PRIMARY KEY (step, start)
+        );
     """)
 
     # Migration: tag rows with the API timestep they came from
@@ -84,6 +91,8 @@ def initialize_db():
         c.execute("ALTER TABLE profit_alerts ADD COLUMN updated INTEGER")
     if "traded_at" not in cols:
         c.execute("ALTER TABLE profit_alerts ADD COLUMN traded_at INTEGER")
+    if "volume" not in cols:
+        c.execute("ALTER TABLE profit_alerts ADD COLUMN volume INTEGER")
 
     # Migration: the old "moved 10% since your last search" alerts were
     # replaced by profit alerts (profit_alerts).
@@ -225,19 +234,19 @@ def sync_profit_alerts(rows: List[dict], cooldown: int,
     for row in rows:
         prev = latest.get(row["item_id"])
         live = (row["buy"], row["sell"], row["net"], row["qty"], row["profit"],
-                row["roi"], row.get("traded_at"), now)
+                row["roi"], row.get("volume"), row.get("traded_at"), now)
         if prev is None or now - prev["timestamp"] >= cooldown:
             conn.execute(
                 "INSERT INTO profit_alerts (buy, sell, net, qty, profit, roi, "
-                "traded_at, updated, item_id, item_name, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "volume, traded_at, updated, item_id, item_name, timestamp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 live + (row["item_id"], row["name"], now))
             new += 1
         elif not prev["dismissed"]:
             conn.execute(
                 "UPDATE profit_alerts SET buy = ?, sell = ?, net = ?, qty = ?, "
-                "profit = ?, roi = ?, traded_at = ?, updated = ?, expired = 0 "
-                "WHERE id = ?",
+                "profit = ?, roi = ?, volume = ?, traded_at = ?, updated = ?, "
+                "expired = 0 WHERE id = ?",
                 live + (prev["id"],))
 
     qualifying = {row["item_id"] for row in rows}
@@ -268,7 +277,7 @@ def get_active_alerts() -> List[dict]:
     conn = get_connection()
     rows = conn.execute(
         "SELECT a.item_id, a.item_name, a.buy, a.sell, a.net, a.qty, "
-        "       a.profit, a.roi, a.timestamp, a.traded_at, "
+        "       a.profit, a.roi, a.timestamp, a.traded_at, a.volume, "
         "       COALESCE(a.updated, a.timestamp) AS updated, c.n "
         "FROM profit_alerts a "
         "JOIN (SELECT item_id, MAX(id) AS mid, COUNT(*) AS n "
@@ -297,6 +306,32 @@ def purge_old_alerts(max_age: int = ALERT_RETENTION):
     conn = get_connection()
     conn.execute("DELETE FROM profit_alerts WHERE timestamp < ?",
                  (int(time.time()) - max_age,))
+    conn.commit()
+    conn.close()
+
+
+# ── Rolling volume history (see volume.py) ───────────────────────────────────
+
+def save_volume_bucket(step: str, start: int, data: str):
+    conn = get_connection()
+    conn.execute("INSERT OR REPLACE INTO volume_buckets (step, start, data) "
+                 "VALUES (?, ?, ?)", (step, start, data))
+    conn.commit()
+    conn.close()
+
+
+def load_volume_buckets() -> List[Tuple]:
+    """(step, start, data) for every saved period."""
+    conn = get_connection()
+    rows = conn.execute("SELECT step, start, data FROM volume_buckets").fetchall()
+    conn.close()
+    return [tuple(r) for r in rows]
+
+
+def delete_volume_buckets_before(step: str, cutoff: int):
+    conn = get_connection()
+    conn.execute("DELETE FROM volume_buckets WHERE step = ? AND start < ?",
+                 (step, cutoff))
     conn.commit()
     conn.close()
 

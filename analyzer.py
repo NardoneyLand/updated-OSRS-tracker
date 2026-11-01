@@ -266,6 +266,8 @@ FLIP_MIN_5M_SUPPORT = 0.5     # the 5m averages must back up this share of the
                               # margin. In practice real margins sit near 100%
                               # and one-off trades at 0% or below.
 FLIP_MIN_SIDE_VOLUME = 10     # min items traded per side in the last hour
+VOLUME_PACE_UP = 3.0          # the last hour vs an average hour over the day
+VOLUME_PACE_DOWN = 0.5
 REVERSION_THRESHOLD = 3.0     # % away from the 1h average to flag
 REVERSION_EXTREME = 25.0      # beyond this, treat as possible manipulation
 
@@ -309,6 +311,24 @@ def reversion_signal(current_mid: float, avg_mid: float) -> Tuple[str, float]:
     if pct >= REVERSION_THRESHOLD:
         return "Spike - may fall", pct
     return "", pct
+
+
+def volume_pace(volume_1h: int, volume_24h: Optional[int]) -> str:
+    """
+    '▲' or '▼' when the last hour's trading is far from the day's usual pace,
+    otherwise ''. Compares the slower side of each. Very quiet items are left
+    out, since a couple of trades there would swing it wildly.
+    """
+    if not volume_24h:
+        return ""
+    usual = volume_24h / 24
+    if max(volume_1h, usual) < FLIP_MIN_SIDE_VOLUME:
+        return ""
+    if volume_1h >= usual * VOLUME_PACE_UP:
+        return "▲"
+    if volume_1h < usual * VOLUME_PACE_DOWN:
+        return "▼"
+    return ""
 
 
 def margin_at_5m_prices(avg_5m: Optional[dict], buy: int, sell: int, net: int,

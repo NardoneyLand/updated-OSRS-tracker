@@ -31,6 +31,7 @@ import search as search_module
 import settings
 import updater
 import useragent
+import volume
 from version import APP_VERSION
 
 
@@ -41,8 +42,6 @@ from version import APP_VERSION
 ALERT_INTERVALS = {"1 min": 60, "5 min": 300, "15 min": 900, "30 min": 1800}
 ALERT_DEFAULT_INTERVAL = "1 min"
 ALERT_MIN_STALE = 300                   # see _alert_stale_after
-ALERT_VOLUME_MAX_AGE = 300              # the big 1h volume list changes slowly
-ALERT_5M_MAX_AGE = 120                  # 5m averages change every 5 minutes
 TRADE_AGE_TICK_MS = 30 * 1000           # keep "Last trade" ages counting up
 ALERT_COOLDOWN = 3600                   # re-alert an item after 1 hour
 ALERT_DEFAULT_THRESHOLD = 1_000_000     # est. profit, adjustable in 100K steps
@@ -244,7 +243,9 @@ HELP_SECTIONS = [
      "what your capital buys, the 4h limit, and about 4 hours of market "
      "volume.\n"
      "    •  Est. profit — Net / item × Qty.\n"
-     "    •  Vol/hr — units traded in the last hour on the slower side.\n"
+     "    •  Vol 1h — units traded in the last hour on the slower side, "
+     "which is what limits how fast a flip fills. ▲ means at least 3x its "
+     "usual hour over the last day; ▼ means under half.\n"
      "    •  Last trade — how long ago the older side last traded. "
      "⏱ means over 5 minutes, so the margin may have moved.\n"
      "    •  Signal — the current price vs its 1-hour average: "
@@ -322,8 +323,9 @@ HELP_SECTIONS = [
      "☆ Add to Watchlist on its result; click ★ On Watchlist to remove it "
      "again. You can also select rows on the Watchlist tab and click "
      "Remove selected.\n\n"
-     "Each item shows its live Buy, Sell, Net / item, ROI, volume, last "
-     "trade and verdict, using the same maths as FlipRec. It updates with "
+     "Each item shows its live Buy, Sell, Net / item, ROI, last trade and "
+     "verdict, using the same maths as FlipRec, plus units traded in the "
+     "last 1, 12 and 24 hours (the slower side). It updates with "
      "market check (see Refresh on the Alerts tab), or when you click "
      "Refresh. Double-click "
      "a row to open the item in Search.\n\n"
@@ -353,7 +355,8 @@ HELP_SECTIONS = [
      "moved.\n"
      "    •  Trend — direction over the item's recent stored prices.\n"
      "    •  Signal — BUY, HOLD or SELL (see below).\n"
-     "    •  Volume — trading now vs the recent average.\n"
+     "    •  Volume — units traded in the last 1, 12 and 24 hours, split "
+     "into instant buys and instant sells.\n"
      "    •  Momentum — whether the move is speeding up or slowing.\n\n"
      "Click ☆ Add to Watchlist to follow the item on the Watchlist tab.\n\n"
      "Below the result is the item's price chart (high, low and mid). "
@@ -419,7 +422,10 @@ HELP_SECTIONS = [
 
     ("How fresh is the data?",
      "The OSRS Wiki updates prices from the game about every 60 "
-     "seconds. FlipRec fetches when you open it or click Refresh; Alerts "
+     "seconds. Volumes are true rolling windows, built from the Wiki's "
+     "5-minute and hourly data. The first launch downloads a day of it in "
+     "the background (under a minute), and until then the 12h and 24h "
+     "numbers and the ▲▼ arrows stay blank. FlipRec fetches when you open it or click Refresh; Alerts "
      "and Watchlist update on the timer you choose on Alerts (every minute "
      "by default); Search is live each time. "
      "Last trade (FlipRec, Alerts, Watchlist, Search) shows exactly how "
@@ -476,9 +482,11 @@ class OSRSTrackerApp:
         self._monitor_started = False
         self._monitor_busy = False
         self._monitor_job = None       # the pending timer for the next check
-        self._monitor_bulk = None      # (1h volumes, fetched_at)
-        self._monitor_5m = None        # (5m averages, fetched_at)
         self._trade_ages = {}          # tree -> {row id: traded_at}
+        self._volume = volume.VolumeHistory(
+            lambda: self.root.after(0, self._on_volume_changed))
+        self._volume_ready = frozenset()
+        self._search_volume = None     # (frame, item_id) showing the table
         self._search_trade = None      # (label, high time, low time)
         self._search_item = None       # item shown in the Search panel
         self._lookup_seq = 0           # latest Search lookup (see _lookup_item)
@@ -498,6 +506,7 @@ class OSRSTrackerApp:
             return
         self.ready = True
         self.root.after(TRADE_AGE_TICK_MS, self._tick_trade_ages)
+        self._volume.start()
         self._load_mapping_async()
         self._refresh_news_from_sources()   # news is ready before you open it
 
@@ -1117,11 +1126,6 @@ class OSRSTrackerApp:
             ("Signal",
              f"{sugg}  ({prediction['confidence']} confidence)",
              sc),
-            ("Volume",
-             f"{prediction['vol_label'].title()}  "
-             f"(recent {fmt_gp(prediction['recent_vol'])} / "
-             f"avg {fmt_gp(prediction['avg_volume'])})",
-             COLOR_TEXT),
             ("Momentum", prediction["momentum"].capitalize(), COLOR_TEXT),
         ]
 
@@ -1136,11 +1140,18 @@ class OSRSTrackerApp:
                                       price_data.get("lowTime"))
                 self._show_search_trade()
 
+        right = ttk.Frame(body, style="Inner.TFrame")
+        right.pack(side="left", anchor="n", fill="x", expand=True, padx=(40, 0))
+
+        volume_frame = ttk.Frame(right, style="Inner.TFrame")
+        volume_frame.pack(anchor="w", pady=(0, 10))
+        self._search_volume = (volume_frame, item["id"])
+        self._render_search_volume()
+
         # Reasons
         if prediction["reasons"]:
-            reasons_frame = ttk.Frame(body, style="Inner.TFrame")
-            reasons_frame.pack(side="left", anchor="n", fill="x",
-                               expand=True, padx=(40, 0))
+            reasons_frame = ttk.Frame(right, style="Inner.TFrame")
+            reasons_frame.pack(anchor="w", fill="x")
             ttk.Label(reasons_frame, text="Analysis:",
                       style="PanelHeader.TLabel"
                       ).pack(anchor="w")
@@ -1149,6 +1160,62 @@ class OSRSTrackerApp:
                           style="Panel.TLabel",
                           wraplength=520, justify="left"
                           ).pack(anchor="w")
+
+    def _render_search_volume(self):
+        """The units-traded table on the Search panel."""
+        if not self._search_volume or not self._search_volume[0].winfo_exists():
+            return
+        frame, item_id = self._search_volume
+        for child in frame.winfo_children():
+            child.destroy()
+        ttk.Label(frame, text="Volume", style="PanelHeader.TLabel"
+                  ).grid(row=0, column=0, sticky="w", padx=(0, 18))
+        windows = (("1h", 3600), ("12h", 12 * 3600), ("24h", 24 * 3600))
+        for col, (label, _s) in enumerate(windows, start=1):
+            ttk.Label(frame, text=label, style="PanelHeader.TLabel"
+                      ).grid(row=0, column=col, sticky="e", padx=(16, 0))
+        for side, row_label in enumerate(("Instant buys", "Instant sells")):
+            ttk.Label(frame, text=row_label, style="Stat.TLabel"
+                      ).grid(row=side + 1, column=0, sticky="w", padx=(0, 18),
+                             pady=1)
+            for col, (_l, seconds) in enumerate(windows, start=1):
+                sides = self._volume.sides(item_id, seconds)
+                tk.Label(frame, text=fmt_gp(sides[side]) if sides else "-",
+                         bg=COLOR_PANEL, font=FONT_VALUE,
+                         fg=COLOR_TEXT if sides else COLOR_DIM
+                         ).grid(row=side + 1, column=col, sticky="e",
+                                padx=(16, 0), pady=1)
+
+    def _on_volume_changed(self):
+        """A new period of volume history arrived."""
+        ready = self._volume.ready_windows()
+        if self.item_data:
+            if 24 * 3600 not in ready:
+                have, wanted = self._volume.progress()
+                self.status_var.set(f"Loading volume history… {have}/{wanted}")
+            elif 24 * 3600 not in self._volume_ready:
+                self.status_var.set(f"{len(self.item_data):,} items loaded.")
+        self._render_search_volume()
+        if ready != self._volume_ready:
+            # New columns can fill in. Otherwise the tables update on the
+            # next market check, so they don't redraw every 5 minutes as well.
+            self._volume_ready = ready
+            self._render_alerts()
+            self._render_watchlist()
+            if self.flip_results:
+                self._render_fliprec_table()
+
+    def _volume_text(self, item_id, volume_1h, fmt) -> str:
+        """The Vol 1h cell: the amount, with an arrow if it's unusual."""
+        pace = analyzer.volume_pace(
+            volume_1h or 0, self._volume.slower_side(item_id, 24 * 3600))
+        return f"{fmt(volume_1h or 0)} {pace}".rstrip()
+
+    def _hour_and_5m_averages(self) -> tuple:
+        """Averages for pricing flips. Rolling data if it's ready; otherwise
+        (for a moment at first launch) the Wiki's newest full periods."""
+        return (self._volume.view(3600) or api.get_bulk_average("1h"),
+                self._volume.view(300) or api.get_bulk_average("5m"))
 
     def _show_search_trade(self):
         label, high_time, low_time = self._search_trade
@@ -1183,7 +1250,8 @@ class OSRSTrackerApp:
         ("qty",    "Qty",         "qty",       75,  "e", True),
         ("profit", "Est. profit", "profit",    115, "e", True),
         ("roi",    "ROI",         "roi",       65,  "e", True),
-        ("age",    "Last trade",  "traded_at", 80,  "e", True),
+        ("volume", "Vol 1h",      "volume",    80,  "e", True),
+        ("age",    "Last trade",  "traded_at", 90,  "e", True),
         ("when",   "Alerted",     "timestamp", 110, "w", True),
         ("hits",   "Times",       "n",         60,  "e", True),
     ]
@@ -1317,22 +1385,7 @@ class OSRSTrackerApp:
         self.alerts_status.set("Checking the market…")
 
         def task():
-            latest = api.get_all_latest_prices()
-            # Latest prices are a must every time. Reuse the volumes for a few
-            # minutes to go easy on the Wiki, and if a refresh of them fails.
-            bulk, bulk_at = self._monitor_bulk or ({}, 0)
-            if time.time() - bulk_at >= ALERT_VOLUME_MAX_AGE:
-                fresh = api.get_bulk_average("1h")
-                if fresh:
-                    bulk = fresh
-                    self._monitor_bulk = (fresh, time.time())
-            bulk_5m, at_5m = self._monitor_5m or ({}, 0)
-            if time.time() - at_5m >= ALERT_5M_MAX_AGE:
-                # If this fails, margins just go unchecked: old averages
-                # could wrongly mark a good margin as Suspect.
-                bulk_5m = api.get_bulk_average("5m")
-                self._monitor_5m = (bulk_5m, time.time()) if bulk_5m else None
-            return latest, bulk, bulk_5m
+            return (api.get_all_latest_prices(), *self._hour_and_5m_averages())
 
         def done(payload, err):
             self._monitor_busy = False
@@ -1428,6 +1481,7 @@ class OSRSTrackerApp:
             iid = tree.insert("", "end", tags=("alert",), values=(
                 a["item_name"], fmt(a["buy"]), fmt(a["sell"]), fmt(a["net"]),
                 fmt(a["qty"]), fmt(a["profit"]), f"{a['roi']:.1f}%",
+                self._volume_text(a["item_id"], a["volume"], fmt),
                 fmt_last_trade(a["traded_at"]),
                 time.strftime("%m/%d %H:%M", time.localtime(a["timestamp"])),
                 a["n"],
@@ -1467,13 +1521,15 @@ class OSRSTrackerApp:
 
     WATCH_COLUMNS = [
         # (tree id, header, sort key, width, anchor, descending on 1st click)
-        ("item",    "Item",        "name",    230, "w",      False),
+        ("item",    "Item",        "name",    220, "w",      False),
         ("buy",     "Buy (gp)",    "buy",     95,  "e",      True),
         ("sell",    "Sell (gp)",   "sell",    95,  "e",      True),
         ("net",     "Net / item",  "net",     90,  "e",      True),
         ("roi",     "ROI",         "roi",     65,  "e",      True),
-        ("volume",  "Vol/hr",      "volume",  75,  "e",      True),
-        ("age",     "Last trade",  "age",     80,  "e",      False),
+        ("volume",  "Vol 1h",      "volume",  80,  "e",      True),
+        ("vol_12h", "12h",         "vol_12h", 70,  "e",      True),
+        ("vol_24h", "24h",         "vol_24h", 75,  "e",      True),
+        ("age",     "Last trade",  "age",     90,  "e",      False),
         ("verdict", "Verdict",     "verdict", 110, "center", True),
         ("added",   "Added",       "added",   100, "w",      True),
     ]
@@ -1548,18 +1604,23 @@ class OSRSTrackerApp:
                                         bulk.get(str(item_id)), capital,
                                         now=fetched_at,
                                         avg_5m=bulk_5m.get(str(item_id)))
+                row["vol_12h"] = self._volume.slower_side(item_id, 12 * 3600)
+                row["vol_24h"] = self._volume.slower_side(item_id, 24 * 3600)
             entries.append((item_id, name, added, row))
 
         for item_id, name, added, row in self._sorted_watch_entries(entries):
             added_s = time.strftime("%m/%d %H:%M", time.localtime(added))
             if row is None:
                 values = (name, "…" if not self._market else "N/A",
-                          "", "", "", "", "", "", added_s)
+                          *[""] * (len(self.WATCH_COLUMNS) - 3), added_s)
                 tag = "dim"
             else:
                 values = (
                     name, fmt(row["buy"]), fmt(row["sell"]), fmt(row["net"]),
-                    f"{row['roi']:.1f}%", fmt(row["volume"]),
+                    f"{row['roi']:.1f}%",
+                    self._volume_text(item_id, row["volume"], fmt),
+                    "-" if row["vol_12h"] is None else fmt(row["vol_12h"]),
+                    "-" if row["vol_24h"] is None else fmt(row["vol_24h"]),
                     fmt_last_trade(row["traded_at"]),
                     "⚠ Inactive" if not row["active"] else row["verdict"],
                     added_s,
@@ -1753,7 +1814,8 @@ class OSRSTrackerApp:
 
         def task():
             latest = api.get_all_latest_prices()
-            bulk = api.get_bulk_average(timestep)
+            bulk = (self._volume.view(volume.STEP_SECONDS[timestep])
+                    or api.get_bulk_average(timestep))
             return analyzer.find_volatile_items(
                 latest, bulk, self.item_data,
                 min_volume=1000, top_n=100,
@@ -1855,7 +1917,7 @@ class OSRSTrackerApp:
 
     FLIP_COLUMNS = [
         # (tree id, header, data key, width, anchor, default desc)
-        ("item",    "Item",        "name",      169, "w",      False),
+        ("item",    "Item",        "name",      160, "w",      False),
         ("buy",     "Buy (gp)",    "buy",       80,  "e",      False),
         ("sell",    "Sell (gp)",   "sell",      80,  "e",      True),
         ("tax",     "GE tax",      "tax",       65,  "e",      True),
@@ -1864,7 +1926,7 @@ class OSRSTrackerApp:
         ("limit",   "4h limit",    "limit",     72,  "e",      True),
         ("qty",     "Qty",         "qty",       55,  "e",      True),
         ("profit",  "Est. profit", "profit",    90,  "e",      True),
-        ("volume",  "Vol/hr",      "volume",    66,  "e",      True),
+        ("volume",  "Vol 1h",      "volume",    75,  "e",      True),
         ("age",     "Last trade",  "age",       88,  "e",      False),
         ("verdict", "Verdict",     "verdict",   80,  "center", True),
         ("signal",  "Signal",      "reversion", 165, "w",      False),
@@ -1982,8 +2044,7 @@ class OSRSTrackerApp:
         self.flip_status.set("Fetching…")
 
         def task():
-            return (api.get_all_latest_prices(), api.get_bulk_average("1h"),
-                    api.get_bulk_average("5m"))
+            return (api.get_all_latest_prices(), *self._hour_and_5m_averages())
 
         def done(payload, err):
             self.flip_refresh_btn.config(state="normal")
@@ -2055,6 +2116,7 @@ class OSRSTrackerApp:
 
     def _render_fliprec_table(self):
         tree = self.flip_tree
+        view = self._tree_view_state(tree, self.flip_id_map)
         for r in tree.get_children():
             tree.delete(r)
         self.flip_id_map.clear()
@@ -2108,12 +2170,13 @@ class OSRSTrackerApp:
                 fmt(r["limit"]) if r["limit"] else "?",
                 fmt(r["qty"]) if r["qty"] else "-",
                 fmt(r["profit"]) if r["qty"] else "-",
-                fmt(r["volume"]),
+                self._volume_text(r["item_id"], r["volume"], fmt),
                 fmt_last_trade(r["traded_at"]),
                 verdict, sig,
             ))
             self.flip_id_map[iid] = r["item_id"]
             ages[iid] = r["traded_at"]
+        self._restore_tree_view(tree, self.flip_id_map, view)
 
     def _on_fliprec_click(self, _event):
         sel = self.flip_tree.selection()
@@ -2523,7 +2586,8 @@ class OSRSTrackerApp:
     def _build_ai_tab(self) -> ttk.Frame:
         frame = ttk.Frame(self.notebook)
         prefs = settings.load()
-        self._ai_tools = aitools.MarketTools(lambda: self.item_data)
+        self._ai_tools = aitools.MarketTools(lambda: self.item_data,
+                                             self._volume)
         self._ai_chat = None           # the current ai.Chat
         self._ai_cancel = None         # set while a question is running
         self._ai_seq = 0               # latest question (see _ai_send)

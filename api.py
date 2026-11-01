@@ -87,17 +87,40 @@ def get_all_latest_prices() -> dict:
         return {}
 
 
-def get_bulk_average(timestep: str = "1h") -> dict:
+def get_bulk_bucket(timestep: str, start: int) -> dict:
     """
-    Bulk averaged prices + volumes for ALL items in the most recent window.
-    timestep: '5m' | '1h' | '6h' | '24h'
-    Returns {item_id_str: {avgHighPrice, avgLowPrice, highPriceVolume, lowPriceVolume}}
+    Bulk averages for ALL items in the period starting at `start`. Empty if
+    that period isn't published yet. Raises if the request fails.
     """
     useragent.require()
-    valid = {"5m", "1h", "6h", "24h"}
-    if timestep not in valid:
-        raise ValueError(f"timestep must be one of {sorted(valid)}")
+    r = requests.get(f"{API_BASE}/{timestep}?timestamp={int(start)}",
+                     headers=HEADERS, timeout=25)
+    r.raise_for_status()
+    return r.json().get("data", {})
+
+
+def get_bulk_average(timestep: str = "1h") -> dict:
+    """
+    Bulk averaged prices + volumes for ALL items in the newest full period.
+    timestep: '5m' | '1h' | '6h' | '24h'
+    Returns {item_id_str: {avgHighPrice, avgLowPrice, highPriceVolume, lowPriceVolume}}
+
+    Asks for that period by time, because the plain /1h, /6h and /24h addresses
+    trail a whole period behind (measured: /24h ended 41 hours ago).
+    """
+    useragent.require()
+    sizes = {"5m": 300, "1h": 3600, "6h": 21600, "24h": 86400}
+    if timestep not in sizes:
+        raise ValueError(f"timestep must be one of {sorted(sizes)}")
     try:
+        if timestep != "5m":   # /5m has no such lag
+            size = sizes[timestep]
+            now = int(time.time())
+            current = now - now % size
+            for back in (1, 2):
+                data = get_bulk_bucket(timestep, current - back * size)
+                if data:
+                    return data
         r = requests.get(f"{API_BASE}/{timestep}", headers=HEADERS, timeout=25)
         r.raise_for_status()
         return r.json().get("data", {})
