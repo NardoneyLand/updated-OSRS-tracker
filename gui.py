@@ -380,7 +380,8 @@ HELP_SECTIONS = [
      "    •  Last trade — how long ago the older side last traded, and each "
      "side separately. ⏱ means over 5 minutes, so the prices may have "
      "moved.\n"
-     "    •  Trend — direction over the item's recent stored prices.\n"
+     "    •  Trend — direction over the last 30 hours or so of prices, "
+     "counted back from now.\n"
      "    •  Signal — BUY, HOLD or SELL (see below).\n"
      "    •  Volume — units traded in the last 1, 12 and 24 hours, split "
      "into instant buys and instant sells.\n"
@@ -1081,9 +1082,10 @@ class OSRSTrackerApp:
             db.backfill_price_history(item_id, item_name, ts_data,
                                     TIMESERIES_STEP)
 
-            history = db.get_price_history(item_id, limit=30)
-            trend = analyzer.calculate_trend(history)
-            prediction = analyzer.get_prediction(trend, ts_data)
+            trend, prediction = analyzer.price_signal(
+                api.get_timeseries(item_id, timestep="5m"),
+                db.get_price_history(item_id, limit=30), ts_data,
+                live=(high, low))
 
             return {
                 "item": item, "price_data": price_data,
@@ -1151,7 +1153,7 @@ class OSRSTrackerApp:
             ("Trend",
              f"{arrow}  {trend['direction'].capitalize()}  "
              f"({trend['pct_change']:+.1f}%)  "
-             f"over {trend['data_points']} snapshots",
+             f"over {trend['data_points']} hourly prices",
              tcolor),
             ("Signal",
              f"{sugg}  ({prediction['confidence']} confidence)",

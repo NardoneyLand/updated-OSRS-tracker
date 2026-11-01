@@ -3,6 +3,7 @@ import os, sqlite3, sys, tempfile, time, traceback
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO)
+import support  # keeps test windows off the screen
 import tkinter as tk
 from tkinter import ttk
 from support import ImageGrab
@@ -122,7 +123,6 @@ scraper.scrape_all = lambda *a, **k: []
 real_after = None
 api.get_bulk_bucket = lambda step, start: {}   # no rolling history in this test
 root = tk.Tk()
-root.attributes("-topmost", True)
 app = gui.OSRSTrackerApp(root)
 
 

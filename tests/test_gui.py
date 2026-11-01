@@ -9,6 +9,7 @@ port = F.start()
 os.environ["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
 os.environ["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
 
+import support  # keeps test windows off the screen
 import tkinter as tk
 from tkinter import ttk
 from support import ImageGrab

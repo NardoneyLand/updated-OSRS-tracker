@@ -179,6 +179,67 @@ def get_prediction(trend: dict, timeseries: list) -> dict:
     }
 
 
+# ── Fresh inputs for the prediction ──────────────────────────────────────────
+
+SIGNAL_HOURS = 30             # how far back the signal looks
+SIGNAL_MIN_PRICED_HOURS = 6   # fewer than this is too thin to use
+
+
+def rolling_hours(points_5m: list, now: Optional[float] = None) -> List[dict]:
+    """
+    Turn an item's 5-minute history into hours counted back from now, oldest
+    first, in the shape of its 1-hour history. The Wiki's own hourly history
+    stops over an hour back, while this reaches the last few minutes. An hour
+    with no trades has no 5-minute rows, so it comes out as zero volume.
+    """
+    import time as _time
+    now = int(now if now is not None else _time.time())
+    end = now - now % 300
+    start = end - SIGNAL_HOURS * 3600
+    hours = [[0, 0, 0, 0] for _ in range(SIGNAL_HOURS)]
+    for point in points_5m:
+        stamp = point.get("timestamp") or 0
+        if not start <= stamp < end:
+            continue
+        hour = hours[(stamp - start) // 3600]
+        high_vol, low_vol = (point.get("highPriceVolume") or 0,
+                             point.get("lowPriceVolume") or 0)
+        high, low = point.get("avgHighPrice"), point.get("avgLowPrice")
+        if high_vol and high:
+            hour[0] += high_vol
+            hour[2] += high * high_vol
+        if low_vol and low:
+            hour[1] += low_vol
+            hour[3] += low * low_vol
+    return [{
+        "timestamp": start + index * 3600,
+        "highPriceVolume": t[0], "lowPriceVolume": t[1],
+        "avgHighPrice": round(t[2] / t[0]) if t[0] else None,
+        "avgLowPrice": round(t[3] / t[1]) if t[1] else None,
+    } for index, t in enumerate(hours)]
+
+
+def price_signal(points_5m: list, fallback_rows: List[Tuple],
+                 fallback_points: list, live: Optional[Tuple[int, int]] = None,
+                 now: Optional[float] = None) -> Tuple[dict, dict]:
+    """
+    (trend, prediction) for an item, from rolling hours where it trades enough.
+    For a thinly traded item, or if the 5-minute history is unavailable, uses
+    the fallback: price rows newest first, and 1-hour points oldest first.
+    """
+    hours = rolling_hours(points_5m, now)
+    rows = [(p["avgHighPrice"], p["avgLowPrice"], p["timestamp"])
+            for p in reversed(hours)
+            if p["avgHighPrice"] and p["avgLowPrice"]]
+    if len(rows) < SIGNAL_MIN_PRICED_HOURS:
+        trend = calculate_trend(fallback_rows)
+        return trend, get_prediction(trend, fallback_points)
+    if live and live[0] and live[1]:
+        rows = [(live[0], live[1], now)] + rows
+    trend = calculate_trend(rows[:SIGNAL_HOURS])
+    return trend, get_prediction(trend, hours)
+
+
 # ── Volatility scanner ────────────────────────────────────────────────────────
 
 def find_volatile_items(

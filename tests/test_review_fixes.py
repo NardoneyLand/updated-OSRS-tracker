@@ -2,6 +2,7 @@
 import ctypes, json, os, sys, tempfile, threading, time, traceback
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
+import support  # keeps test windows off the screen
 import tkinter as tk
 import settings, db
 tmp = tempfile.mkdtemp()
@@ -279,7 +280,6 @@ scraper.scrape_all = lambda *a, **k: []
 gui.volume = volume
 k32 = ctypes.windll.kernel32
 root = tk.Tk()
-root.attributes("-topmost", True)
 app = gui.OSRSTrackerApp(root)
 
 

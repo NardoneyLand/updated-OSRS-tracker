@@ -5,6 +5,12 @@ What's new in each version of OSRS Price Tracker. To update, open
 
 ## 1.3.2 — 2026-11-01
 
+**Changed**
+- The Buy / Hold / Sell signal on Search and Ask AI now uses prices and volume
+  up to the last few minutes, instead of history that stopped over an hour
+  back. Some suggestions will look different. It's still a rough hint, so check
+  the numbers before you trade.
+
 **Fixed**
 - A Watchlist item with only one price no longer breaks the Watchlist and the
   Alerts status.

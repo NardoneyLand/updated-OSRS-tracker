@@ -3,6 +3,7 @@ import os, sys, tempfile, time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO)
+import support  # keeps test windows off the screen
 import tkinter as tk
 import tkinter.font as tkfont
 from support import ImageGrab
@@ -26,7 +27,6 @@ api.get_bulk_average = lambda t="1h": {}
 scraper.scrape_all = lambda *a, **k: []
 api.get_bulk_bucket = lambda step, start: {}   # no rolling history in this test
 root = tk.Tk()
-root.attributes("-topmost", True)
 app = gui.OSRSTrackerApp(root)
 app._ai_live_models[("OpenRouter", ai.OPENROUTER_URL)] = live
 app._refresh_ai_models = lambda force=False: None

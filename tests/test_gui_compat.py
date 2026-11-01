@@ -8,6 +8,7 @@ import fake_llm as F
 port = F.start()
 FAKE = f"http://127.0.0.1:{port}/v1"
 
+import support  # keeps test windows off the screen
 import tkinter as tk
 from tkinter import ttk
 from support import ImageGrab
@@ -33,7 +34,6 @@ F.MODELS_DATA[:] = [{"id": "z/live-model", "object": "model", "supported_paramet
 
 api.get_bulk_bucket = lambda step, start: {}   # no rolling history in this test
 root = tk.Tk()
-root.attributes("-topmost", True)
 app = gui.OSRSTrackerApp(root)
 failures = []
 
@@ -107,7 +107,6 @@ def scenario():
 
         def key_dialog():
             d = dialog()
-            d.attributes("-topmost", True)
             d.update()
             time.sleep(0.3)
             grab(d, "shot_or_dialog.png")
@@ -142,7 +141,6 @@ def scenario():
 
         def custom_dialog():
             d = dialog()
-            d.attributes("-topmost", True)
             d.update()
             time.sleep(0.3)
             grab(d, "shot_custom_dialog.png")

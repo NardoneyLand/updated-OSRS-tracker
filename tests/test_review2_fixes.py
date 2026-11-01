@@ -8,6 +8,7 @@ port = F.start()
 FAKE = f"http://127.0.0.1:{port}/v1"
 os.environ["ANTHROPIC_BASE_URL"] = f"http://127.0.0.1:{port}"
 os.environ["OPENAI_BASE_URL"] = FAKE
+import support  # keeps test windows off the screen
 import tkinter as tk
 import settings, db
 tmp = tempfile.mkdtemp()
@@ -189,7 +190,6 @@ api.get_latest_price = lambda i: latest()[str(i)]
 api.get_timeseries = lambda i, timestep="1h": []
 scraper.scrape_all = lambda *a, **k: []
 root = tk.Tk()
-root.attributes("-topmost", True)
 app = gui.OSRSTrackerApp(root)
 errors = []
 real_report = root.report_callback_exception

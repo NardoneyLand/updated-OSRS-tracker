@@ -3,6 +3,7 @@ import os, sys, tempfile, threading, time, traceback
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO)
+import support  # keeps test windows off the screen
 import tkinter as tk
 from support import ImageGrab
 import settings, db
@@ -263,7 +264,6 @@ def fallback(step="1h"):
 api.get_bulk_average = fallback
 scraper.scrape_all = lambda *a, **k: []
 root = tk.Tk()
-root.attributes("-topmost", True)
 app = gui.OSRSTrackerApp(root)
 gui.volume.BACKFILL_PAUSE = 0
 app._volume.__class__.__module__

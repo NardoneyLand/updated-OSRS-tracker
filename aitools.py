@@ -298,8 +298,9 @@ class MarketTools:
         # The trend reads rows newest first, like db.get_price_history().
         rows = [(p.get("avgHighPrice"), p.get("avgLowPrice"), p.get("timestamp"))
                 for p in reversed(points[-30:])]
-        trend = analyzer.calculate_trend(rows)
-        prediction = analyzer.get_prediction(trend, points)
+        live = (lt.get("high"), lt.get("low")) if lt else None
+        _trend, prediction = analyzer.price_signal(
+            api.get_timeseries(item_id, timestep="5m"), rows, points, live=live)
 
         return {
             "name": item["name"],
