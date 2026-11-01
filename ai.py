@@ -90,6 +90,25 @@ Your reply appears in a plain text box that does not render Markdown. Write shor
 paragraphs and simple lists starting with "- ", with no asterisks, headings or \
 tables. Write gp amounts the way players do, such as 1.2M or 450K."""
 
+MAX_INSTRUCTIONS = 4000           # characters; they're sent with every question
+INSTRUCTIONS_INTRO = """
+
+The user saved the instructions below for your answers. Follow them for layout, \
+tone, length and what to include, even where they differ from the style guidance \
+above, such as how to write gp amounts. Keep to plain text, because the reply box \
+still can't render Markdown. They don't change the facts: still look data up, \
+keep the numbers accurate, and say when data is thin or a margin looks unreliable.
+
+"""
+
+
+def system_prompt(instructions: str = "") -> str:
+    """The system prompt, with the user's saved instructions if there are any."""
+    instructions = (instructions or "").strip()
+    if not instructions:
+        return SYSTEM_PROMPT
+    return SYSTEM_PROMPT + INSTRUCTIONS_INTRO + instructions
+
 _session_keys: Dict[str, str] = {}
 
 
@@ -284,11 +303,13 @@ class Chat:
     """
 
     def __init__(self, provider: str, model: str, tools: aitools.MarketTools,
-                 url: Optional[str] = None):
+                 url: Optional[str] = None, instructions: str = ""):
         self.provider = provider
         self.model = model
         self.tools = tools
         self.url = url
+        self.instructions = instructions
+        self.system = system_prompt(instructions)
         self.history: list = []
 
     def send(self, question: str, api_key: str,
@@ -347,7 +368,7 @@ def _anthropic_turn(chat: Chat, api_key: str, messages: list, on_text, on_status
             with client.beta.messages.stream(
                 model=chat.model,
                 max_tokens=MAX_OUTPUT_TOKENS,
-                system=SYSTEM_PROMPT,
+                system=chat.system,
                 messages=messages,
                 tools=tools,
                 tool_choice={"type": "none" if final_round else "auto"},
@@ -463,7 +484,7 @@ def _openai_turn(chat: Chat, api_key: str, messages: list, on_text, on_status,
             # reasoning has to come back encrypted for the next request.
             stream = client.responses.create(
                 model=chat.model,
-                instructions=SYSTEM_PROMPT,
+                instructions=chat.system,
                 input=messages,
                 tools=tools,
                 tool_choice="none" if final_round else "auto",
@@ -566,7 +587,7 @@ def _compatible_turn(chat: Chat, api_key: str, messages: list, on_text, on_statu
         try:
             stream = client.chat.completions.create(
                 model=chat.model,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + messages,
+                messages=[{"role": "system", "content": chat.system}] + messages,
                 tools=tools,
                 tool_choice="none" if final_round else "auto",
                 stream=True,

@@ -3,6 +3,16 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.2 — 2026-11-01
+
+**Added**
+- Ask AI instructions. Click Instructions… to save directions that go with every
+  question, such as the layout to use for item information.
+
+**Fixed**
+- Help now covers target prices, the Search Volume row and Worth knowing notes,
+  and everything that's saved, and no longer lists the log file as a button.
+
 ## 1.4.1 — 2026-11-01
 
 **Added**

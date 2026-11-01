@@ -15,7 +15,7 @@ Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** �
 - **Watchlist** — add items from Search, follow their live margins, and set target prices to be alerted when an item's Buy price falls to one or its Sell price rises to one.
 - **Volatile scanner** — the biggest movers across the whole GE over 5m / 1h / 6h / 24h.
 - **Item search + price chart** — autocomplete lookup with the item's recent price move, volume and momentum, plus the item's price chart (1H to 1 year, backed by the OSRS Wiki's history) on the same page.
-- **Ask AI** — ask an AI for suggestions using your own API key from Anthropic, OpenAI, OpenRouter, or any service with an OpenAI-compatible API. The AI can look up live flips, big movers, item history, your Watchlist, your alerts and the news, but it can't change anything or place trades.
+- **Ask AI** — ask an AI for suggestions using your own API key from Anthropic, OpenAI, OpenRouter, or any service with an OpenAI-compatible API. The AI can look up live flips, big movers, item history, your Watchlist, your alerts and the news, but it can't change anything or place trades. Save your own instructions to get answers in the same format every time.
 - **Live news** — the official OSRS news feed, loaded on launch.
 - **In-app Help tab** — explains every tab, the verdicts and the GE tax.
 

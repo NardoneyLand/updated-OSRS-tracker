@@ -80,6 +80,15 @@ AI_STARTERS = [
     ("Review my watchlist",
      "Review my watchlist and alerts. Which items should I act on or skip?"),
 ]
+AI_INSTRUCTIONS_EXAMPLE = """\
+When giving item information, use this layout:
+Item: name
+Buy: price in full gp
+Sell: price in full gp
+Margin after tax: gp and ROI
+Volume: units per hour on the slower side
+Last trade: how long ago
+Verdict: the app's verdict, then one short sentence of advice"""
 
 # Fantasy / OSRS-inspired palette (avoiding Jagex copyrighted colors directly)
 COLOR_BG       = "#1a120b"   # near-black brown
@@ -380,7 +389,7 @@ HELP_SECTIONS = [
      "Remove selected.\n\n"
      "Each item shows its live Buy, Sell, Net / item, ROI, last trade and "
      "verdict, using the same maths as FlipRec, plus units traded in the "
-     "last 1, 12 and 24 hours (the slower side). It updates with "
+     "last 1, 12 and 24 hours (the slower side). It updates with every "
      "market check (see Refresh on the Alerts tab), or when you click "
      "Refresh. Double-click "
      "a row to open the item in Search.\n\n"
@@ -389,8 +398,8 @@ HELP_SECTIONS = [
      "target, and Sell ≥ for the Sell price rising to it. Type 19,000, 19k "
      "or 1.5m.\n"
      "    •  A met target gets a ✓ and a gold row, the tab shows how many "
-     "items have one, e.g. Watchlist (1), and the taskbar flashes if the app "
-     "isn't in front.\n"
+     "items have one, e.g. Watchlist (1), and on Windows the taskbar flashes "
+     "if the app isn't in front.\n"
      "    •  It's checked on the same timer as alerts, only while the app is "
      "open, against the latest trade. One odd trade can meet a target, so check "
      "the price before acting.\n"
@@ -425,10 +434,14 @@ HELP_SECTIONS = [
      "moved.\n"
      "    •  Price move — how far the price has moved over the last 30 hours "
      "or so, counted back from now.\n"
-     "    •  Volume — units traded in the last 1, 12 and 24 hours, split "
-     "into instant buys and instant sells.\n"
+     "    •  Volume — whether the last hour's trading is high, normal or low "
+     "for this item, with both numbers.\n"
      "    •  Momentum — whether prices in the later half of that time are "
-     "higher or lower than in the earlier half.\n\n"
+     "higher or lower than in the earlier half.\n"
+     "    •  Volume table — units traded in the last 1, 12 and 24 hours, split "
+     "into instant buys and instant sells.\n"
+     "    •  Worth knowing — notes when something needs care, such as an extreme "
+     "price swing or quiet trading.\n\n"
      "Click ☆ Add to Watchlist to follow the item on the Watchlist tab.\n\n"
      "Below the result is the item's price chart (high, low and mid). "
      "Choose a range: 1H, 12H, 1D, 1W, 1M, 1Y or All. The history comes "
@@ -448,13 +461,17 @@ HELP_SECTIONS = [
      "did worse than average and SELL items did better.\n\n"
      "Prices often partly reverse after a big move, but usually by less than "
      "the 2% GE tax, so simply doing the opposite doesn't reliably make money "
-     "either. Use the margins on FlipRec for flipping decisions."),
+     "either. Use the margins on FlipRec for flipping decisions.\n\n"
+     "The Signal column on FlipRec only says how far the price is from its "
+     "1-hour average. It isn't a recommendation to buy or sell."),
 
     ("Ask AI — suggestions from your own AI account",
      "Ask questions in plain English, such as \"What should I flip with "
      "20m?\" or \"Is now a good time to buy a whip?\" The AI looks up "
-     "live prices, flips, big movers, item history, your Watchlist, your "
-     "alerts and the news, then answers using those numbers.\n\n"
+     "live prices, flips, big movers, item history, your Watchlist and "
+     "target prices, your alerts and the news, then answers using those "
+     "numbers. The buttons above the box ask common questions for you. Stop "
+     "ends an answer early, and the AI won't remember that question.\n\n"
      "Setting it up:\n"
      "    1.  Choose a Provider: Anthropic, OpenAI, OpenRouter, or "
      "OpenAI-compatible for any other service with an OpenAI-compatible API "
@@ -467,6 +484,24 @@ HELP_SECTIONS = [
      "support tools (also called function calling), because that's how it "
      "reads the app's data. Faster models usually cost less. Changing the "
      "model starts a new conversation.\n\n"
+     "Your instructions: click Instructions… to save directions that go with "
+     "every question, so answers come back the same way each time. Click Add an "
+     "example to start from this:\n\n"
+     "    When giving item information, use this layout:\n"
+     "    Item: name\n"
+     "    Buy: price in full gp\n"
+     "    Sell: price in full gp\n"
+     "    and so on\n\n"
+     "    •  The button shows a ✓ while instructions are saved. To stop using "
+     "them, click Clear in the same window, then Save.\n"
+     "    •  They shape how the AI answers, such as layout, tone, length and "
+     "what to include. They can't change the app's data or let the AI change "
+     "anything, and it may not follow them perfectly.\n"
+     "    •  Replies appear as plain text, so bold text, headings and tables "
+     "won't display. Line-by-line layouts work well.\n"
+     "    •  Saving a change starts a new conversation with your next question.\n"
+     "    •  You can save up to 4,000 characters. Longer instructions cost more, "
+     "because every question sends them.\n\n"
      "What it costs: the service bills your account for each question. "
      "The token count shown after each answer, when the service reports one, "
      "is what that question used. "
@@ -476,9 +511,10 @@ HELP_SECTIONS = [
      "Credential Manager or macOS Keychain), not in your settings file, "
      "and is only sent to the service you chose. Remove it any time from "
      "the API key… window.\n\n"
-     "What gets shared: your question, plus whatever the AI looks up: "
-     "market data, your capital and item filter, Watchlist, alerts and news "
-     "headlines. Your contact is not shared. Services like OpenRouter pass "
+     "What gets shared: your question and your instructions, plus whatever "
+     "the AI looks up: market data, your capital and item filter, Watchlist, "
+     "target prices, alerts and news headlines. Your contact is not shared. "
+     "Services like OpenRouter pass "
      "it on to whichever company runs the model you pick.\n\n"
      "The AI can read this data but can't change anything in the app or "
      "place trades. It can make mistakes, so check the numbers in game "
@@ -513,24 +549,27 @@ HELP_SECTIONS = [
      "Change contact… at the top of this tab to update it."),
 
     ("Your settings and data",
-     "Your contact, Capital, filters, price format and alert threshold "
-     "are saved automatically, along with your watchlist, alerts and "
+     "Your contact, Capital, filters, price formats, alert threshold and "
+     "check rate, and your Ask AI provider, models and instructions are saved "
+     "automatically, along with your watchlist, target prices, alerts and "
      "price history. They're stored on your computer in:\n\n"
      "    •  Windows: %APPDATA%\\OSRS Tracker\n"
-     "    •  macOS: ~/Library/Application Support/OSRS Tracker"),
+     "    •  macOS: ~/Library/Application Support/OSRS Tracker\n\n"
+     "Ask AI keys are the exception: they stay in your computer's credential "
+     "store."),
 
     ("Updates, logs and your data folder",
-     "The top of this tab shows your version and three tools:\n\n"
+     "The top of this tab shows your version and two buttons:\n\n"
      "    •  Check for updates — looks for a newer release on the project's "
      "GitHub page. On Windows it downloads the installer, closes the app, "
      "updates it and reopens it. On macOS it downloads and opens the disk "
      "image: quit the app and drag the new version into Applications. "
      "Only the app name and version are sent to GitHub.\n"
      "    •  Open data folder — your settings, watchlist, alerts, price "
-     "history and log file.\n"
-     "    •  Log file (osrs_tracker.log) — if something goes wrong, the "
-     "details are saved here. Attach it when reporting a problem on the "
-     "project's GitHub Issues page."),
+     "history and log file.\n\n"
+     "If something goes wrong, the details are saved to osrs_tracker.log in "
+     "that folder. Attach it when reporting a problem on the project's GitHub "
+     "Issues page."),
 
     ("Disclaimer",
      "Estimates only — offers can take time to fill and margins can "
@@ -2911,10 +2950,10 @@ class OSRSTrackerApp:
 
         # Packed bottom-up so the input stays visible in a short window.
         ttk.Label(frame,
-                  text=("Your question and the data the AI looks up go to "
-                        "the service you chose, which bills your account. "
+                  text=("Your question, your instructions and the data the AI "
+                        "looks up go to the service you chose, which bills your account. "
                         "Answers can be wrong. See Help."),
-                  style="Dim.TLabel", wraplength=1000, justify="center"
+                  style="Dim.TLabel", wraplength=840, justify="center"
                   ).pack(side="bottom", pady=(0, 10))
 
         input_row = ttk.Frame(frame)
@@ -2944,6 +2983,11 @@ class OSRSTrackerApp:
             ttk.Button(starters, text=label, style="Range.TButton",
                        command=lambda q=question: self._ai_send(q)
                        ).pack(side="left", padx=(0, 6))
+        self.ai_instructions_btn = ttk.Button(
+            starters, style="Range.TButton",
+            command=self._ai_instructions_dialog)
+        self.ai_instructions_btn.pack(side="left", padx=(10, 0))
+        self._update_ai_instructions_btn()
 
         text = scrolledtext.ScrolledText(
             frame, wrap="word", state="disabled",
@@ -3073,12 +3117,16 @@ class OSRSTrackerApp:
         self._save_ai_model()
 
         chat = self._ai_chat
-        if not chat or (chat.provider, chat.model, chat.url) != (provider, model, url):
+        instructions = self._ai_instructions()
+        same_model = chat and (chat.provider, chat.model, chat.url) == (provider, model, url)
+        if not same_model or chat.instructions != instructions:
             if chat and chat.history:
-                self._ai_write(f"\nNow using {model}. This is a new "
+                using = model if not same_model else "your updated instructions"
+                self._ai_write(f"\nNow using {using}. This is a new "
                                "conversation, so it can't see the earlier "
                                "questions.\n", "note")
-            chat = self._ai_chat = ai.Chat(provider, model, self._ai_tools, url)
+            chat = self._ai_chat = ai.Chat(provider, model, self._ai_tools, url,
+                                           instructions)
 
         self._ai_write("You\n", "speaker")
         self._ai_write(question + "\n", "body")
@@ -3142,6 +3190,111 @@ class OSRSTrackerApp:
         self.ai_text.delete("1.0", "end")
         self.ai_text.configure(state="disabled")
         self._ai_write(AI_INTRO + "\n", "note")
+
+    def _ai_instructions(self) -> str:
+        """The instructions saved for the AI, or an empty string."""
+        saved = settings.load().get("ai_instructions")
+        return saved.strip() if isinstance(saved, str) else ""
+
+    def _update_ai_instructions_btn(self):
+        self.ai_instructions_btn.config(
+            text="Instructions ✓" if self._ai_instructions() else "Instructions…")
+
+    def _ai_instructions_dialog(self):
+        """Dialog to write the standing instructions sent with every question."""
+        saved = self._ai_instructions()
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Instructions for the AI")
+        dlg.configure(bg=COLOR_BG)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+
+        body = ttk.Frame(dlg)
+        body.pack(fill="both", expand=True, padx=24, pady=20)
+        ttk.Label(body, text="Instructions for the AI", style="Header.TLabel"
+                  ).pack(anchor="w", pady=(0, 10))
+        ttk.Label(body, wraplength=560, justify="left", text=(
+            "These go with every question, so answers come back the way you "
+            "want. Use them for layout, tone, length and what to include. They "
+            "can't change the app's data, and the AI may not follow them "
+            "perfectly.")).pack(anchor="w", pady=(0, 10))
+
+        box = scrolledtext.ScrolledText(
+            body, width=68, height=12, wrap="word",
+            background=COLOR_INPUT, foreground=COLOR_TEXT,
+            insertbackground=COLOR_ACCENT,
+            highlightthickness=1, highlightbackground=COLOR_BORDER,
+            highlightcolor=COLOR_ACCENT, borderwidth=0,
+            padx=8, pady=6, font=FONT_BODY)
+        box.pack(fill="x")
+        box.insert("1.0", saved)
+        box.focus_set()
+
+        tools = ttk.Frame(body)
+        tools.pack(fill="x", pady=(6, 0))
+        count = tk.Label(tools, bg=COLOR_BG, font=FONT_SMALL)
+        count.pack(side="right")
+
+        def typed():
+            return box.get("1.0", "end").strip()
+
+        def show_count(_e=None):
+            over = len(typed()) > ai.MAX_INSTRUCTIONS
+            count.config(fg=COLOR_RED if over else COLOR_DIM,
+                         text=f"{len(typed()):,} / {ai.MAX_INSTRUCTIONS:,} characters"
+                              + (" (too long)" if over else ""))
+
+        def add_example():
+            box.insert("end", ("\n\n" if typed() else "") + AI_INSTRUCTIONS_EXAMPLE)
+            show_count()
+
+        def clear():
+            box.delete("1.0", "end")
+            show_count()
+
+        ttk.Button(tools, text="Add an example", style="Range.TButton",
+                   command=add_example).pack(side="left", padx=(0, 6))
+        ttk.Button(tools, text="Clear", style="Range.TButton",
+                   command=clear).pack(side="left")
+        box.bind("<KeyRelease>", show_count)
+        show_count()
+
+        ttk.Label(body, style="Dim.TLabel", wraplength=560, justify="left",
+                  text=("Saved on this computer and sent to the AI service you "
+                        "choose. Don't include passwords or keys. Longer "
+                        "instructions cost more, because every question sends them.")
+                  ).pack(anchor="w", pady=(10, 0))
+
+        def close(_e=None):
+            dlg.destroy()
+
+        def save():
+            text = typed()
+            if len(text) > ai.MAX_INSTRUCTIONS:
+                return                 # the count already says it's too long
+            if text != saved:
+                settings.save({"ai_instructions": text})
+                self._update_ai_instructions_btn()
+                note = "Instructions saved." if text else "Instructions cleared."
+                if self._ai_chat and self._ai_chat.history:
+                    note += " Your next question starts a new conversation."
+                self._ai_write(note + "\n", "note")
+            close()
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(14, 0))
+        ttk.Button(buttons, text="Cancel", command=close).pack(side="right")
+        ttk.Button(buttons, text="Save", command=save
+                   ).pack(side="right", padx=(0, 8))
+        dlg.bind("<Escape>", close)
+
+        dlg.update_idletasks()
+        x = (dlg.winfo_screenwidth() - dlg.winfo_reqwidth()) // 2
+        y = (dlg.winfo_screenheight() - dlg.winfo_reqheight()) // 3
+        dlg.geometry(f"+{x}+{y}")
+        dlg.grab_set()
+        dlg.lift()
 
     def _ai_key_dialog(self, provider: str) -> bool:
         """Modal dialog to add or remove an API key. True if a key was saved."""

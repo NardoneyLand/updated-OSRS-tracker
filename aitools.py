@@ -99,8 +99,8 @@ TOOLS = [
         "name": "get_my_tracker",
         "description": (
             "The user's own setup: capital, membership filter, the items on "
-            "their Watchlist with live flip stats, and their active profit "
-            "alerts."),
+            "their Watchlist with live flip stats and any target prices, and "
+            "their active profit alerts."),
         "schema": {"type": "object", "properties": {}},
     },
     {
