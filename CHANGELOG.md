@@ -3,6 +3,24 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.7 — 2026-11-02
+
+**New**
+- Right-click a row on FlipRec, Alerts, Watchlist or Volatile to add it to your
+  Watchlist, ignore it or open it in Search. Select several rows to add or ignore
+  them together.
+- An Ignored List tab holds items you don't want to see. They're hidden from
+  FlipRec, Alerts and Volatile, and you can bring them back from the tab. Search
+  still finds them. On your Watchlist they stay put with an Ignored tag, and their
+  target prices keep working.
+- Ask AI doesn't suggest ignored items, and says so if one comes up on your
+  Watchlist or because you asked about it.
+
+**Fixed**
+- Help no longer says Upfront assumes the full 4h limit with no Capital set, since
+  market volume can lower the quantity too. It also lists Upfront under Alerts and
+  mentions the sideways scrollbar.
+
 ## 1.4.6 — 2026-11-01
 
 **New**

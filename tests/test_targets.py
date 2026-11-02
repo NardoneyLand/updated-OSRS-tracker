@@ -176,7 +176,7 @@ def scenario():
         flashes.clear()
 
         check(tab() == "Watchlist", "no count with no targets")
-        root.geometry("1250x860")
+        root.geometry("1380x860")
         settle(lambda: False, 0.3)
         tree = app.watch_tree
         total = sum(tree.column(c, "width") for c in tree["columns"])

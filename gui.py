@@ -68,6 +68,8 @@ STEP_SECONDS = api.STEP_SECONDS
 UI_QUEUE_POLL_MS = 50             # how often the window picks up finished work
 CHART_MIN_POINTS = 4              # zooming stops at about this many points
 FLIP_MAX_ROWS = 300
+VOLATILE_TOP = 100
+IGNORED_TAG = "Ignored · "              # on a Watchlist row that's also ignored
 AI_MODEL_LIST_MARGIN = 40         # px for the list's scrollbar and padding
 AI_INTRO = ("Ask about flips, prices, your Watchlist or the news. The AI looks "
             "up live data from this app before it answers.")
@@ -284,11 +286,21 @@ HELP_SECTIONS = [
      "    4.  On Alerts, choose the profit that's worth your time "
      "(1M by default). The app checks for you every minute, or as often "
      "as you choose.\n"
-     "    5.  Add items you want to follow to your Watchlist from the "
-     "Search tab.\n\n"
-     "The tabs, left to right: FlipRec · Alerts · Watchlist · Volatile · "
-     "Search · Ask AI · News · Help. If the window is too narrow for a table, "
-     "a sideways scrollbar appears under it."),
+     "    5.  Right-click an item to add it to your Watchlist, or to ignore "
+     "it so it stops appearing.\n\n"
+     "The tabs, left to right: FlipRec · Alerts · Watchlist · Ignored List · "
+     "Volatile · Search · Ask AI · News · Help. If the window is too narrow "
+     "for a table, a sideways scrollbar appears under it."),
+
+    ("Right-click menu",
+     "Right-click a row on FlipRec, Alerts, Watchlist or Volatile:\n\n"
+     "    •  Add to Watchlist, or Remove from Watchlist.\n"
+     "    •  Ignore item — adds it to the Ignored List tab, or Remove from "
+     "Ignored List.\n"
+     "    •  Open in Search.\n\n"
+     "If you've selected several rows and right-click one of them, the "
+     "Watchlist and Ignore options apply to all of them. Open in Search opens "
+     "the row you clicked."),
 
     ("FlipRec — flip recommendations",
      "FlipRec lists every item you could buy and immediately resell at a "
@@ -397,10 +409,12 @@ HELP_SECTIONS = [
      "so you'll see more (and larger) alerts."),
 
     ("Watchlist — items you follow",
-     "Your own hand-picked list. To add an item, search it and click "
-     "☆ Add to Watchlist on its result; click ★ On Watchlist to remove it "
-     "again. You can also select rows on the Watchlist tab and click "
-     "Remove selected.\n\n"
+     "Your own hand-picked list. To add an item, right-click it in a table, "
+     "or search it and click ☆ Add to Watchlist on its result; click "
+     "★ On Watchlist to remove it again. You can also select rows on the "
+     "Watchlist tab and click Remove selected. Only you decide what's on it, "
+     "so ignoring an item doesn't remove it: it stays here with an Ignored tag "
+     "next to its name, and its target prices keep working.\n\n"
      "Each item shows its live Buy, Sell, Net / item, ROI, last trade and "
      "verdict, using the same maths as FlipRec, plus units traded in the "
      "last 1, 12 and 24 hours (the slower side). It updates with every "
@@ -421,6 +435,19 @@ HELP_SECTIONS = [
      "or comes back within the hour, it won't flash again.\n\n"
      "Click a column header to sort (oldest added first to start); click "
      "again to reverse. Verdict sorts by rank, as on FlipRec."),
+
+    ("Ignored List — items you never want to see",
+     "Right-click an item and choose Ignore item to add it here. Ignored items "
+     "don't appear on FlipRec, Alerts or Volatile, and they never trigger an "
+     "alert. Volatile still shows the top 100 movers without them.\n\n"
+     "    •  Your Watchlist and Search still show them. An ignored item on your "
+     "Watchlist has an Ignored tag, and its target prices keep working.\n"
+     "    •  Ask AI doesn't suggest them. If one comes up, on your Watchlist or "
+     "because you asked about it, the AI says it's ignored.\n"
+     "    •  To bring items back, select them and click Remove from list, or "
+     "right-click them.\n\n"
+     "Click a column header to sort (newest first to start); click again to "
+     "reverse. Double-click a row to open the item in Search."),
 
     ("Volatile — big movers",
      "Scans every item on the Grand Exchange for large price moves. Pick "
@@ -530,7 +557,9 @@ HELP_SECTIONS = [
      "the AI looks up: market data, your capital and item filter, Watchlist, "
      "target prices, alerts and news headlines. Your contact is not shared. "
      "Services like OpenRouter pass "
-     "it on to whichever company runs the model you pick.\n\n"
+     "it on to whichever company runs the model you pick. The AI is told which "
+     "of your Watchlist items are ignored, and whether an item you ask about "
+     "is. The rest of your Ignored List isn't sent.\n\n"
      "The AI can read this data but can't change anything in the app or "
      "place trades. It can make mistakes, so check the numbers in game "
      "before you trade."),
@@ -566,8 +595,8 @@ HELP_SECTIONS = [
     ("Your settings and data",
      "Your contact, Capital, filters, price formats, alert threshold and "
      "check rate, and your Ask AI provider, models and instructions are saved "
-     "automatically, along with your watchlist, target prices, alerts and "
-     "price history. They're stored on your computer in:\n\n"
+     "automatically, along with your watchlist, target prices, Ignored List, "
+     "alerts and price history. They're stored on your computer in:\n\n"
      "    •  Windows: %APPDATA%\\OSRS Tracker\n"
      "    •  macOS: ~/Library/Application Support/OSRS Tracker\n\n"
      "If settings can't be saved, such as when another program has the file "
@@ -590,8 +619,8 @@ HELP_SECTIONS = [
      "updates it and reopens it. On macOS it downloads and opens the disk "
      "image: quit the app and drag the new version into Applications. "
      "Only the app name and version are sent to GitHub.\n"
-     "    •  Open data folder — your settings, watchlist, alerts, price "
-     "history and log file.\n\n"
+     "    •  Open data folder — your settings, watchlist, Ignored List, "
+     "alerts, price history and log file.\n\n"
      "If something goes wrong, the details are saved to osrs_tracker.log in "
      "that folder. Attach it when reporting a problem on the project's GitHub "
      "Issues page."),
@@ -618,6 +647,8 @@ class OSRSTrackerApp:
 
         self.ready = False
         self._market = None            # (latest, bulk_1h, fetched_at, bulk_5m)
+        self._ignored = set()          # item ids on the Ignored List
+        self._row_menu = None          # the open right-click menu
         self._monitor_started = False
         self._monitor_busy = False
         self._monitor_job = None       # the pending timer for the next check
@@ -644,6 +675,7 @@ class OSRSTrackerApp:
         self._build_ui()
 
         db.initialize_db()
+        self._ignored = db.ignored_ids()
         db.expire_stale_alerts(self._alert_stale_after())
         # A contact is required before any network request (see useragent.py).
         if not self._ensure_contact():
@@ -932,7 +964,7 @@ class OSRSTrackerApp:
         style.configure("TNotebook.Tab",
                         background=COLOR_PANEL,
                         foreground=COLOR_DIM,
-                        padding=(18, 8),
+                        padding=(12, 8),
                         font=("Georgia", 11, "bold"),
                         bordercolor=COLOR_BORDER)
         style.map("TNotebook.Tab",
@@ -1010,6 +1042,7 @@ class OSRSTrackerApp:
         self.ai_tab = self._build_ai_tab()
         self.alerts_tab = self._build_alerts_tab()
         self.watchlist_tab = self._build_watchlist_tab()
+        self.ignored_tab = self._build_ignored_tab()
         self.volatile_tab = self._build_volatile_tab()
         self.fliprec_tab = self._build_fliprec_tab()
         self.news_tab = self._build_news_tab()
@@ -1018,6 +1051,7 @@ class OSRSTrackerApp:
         self.notebook.add(self.fliprec_tab, text="FlipRec")
         self.notebook.add(self.alerts_tab, text="Alerts")
         self.notebook.add(self.watchlist_tab, text="Watchlist")
+        self.notebook.add(self.ignored_tab, text="Ignored List")
         self.notebook.add(self.volatile_tab, text="Volatile")
         self.notebook.add(self.search_tab, text="Search")
         self.notebook.add(self.ai_tab, text="Ask AI")
@@ -1570,6 +1604,7 @@ class OSRSTrackerApp:
                       self.alerts_tree, self.alert_id_map))
         self.alerts_tree = tree
         self.alert_id_map = {}
+        self._add_row_menu(tree, self.alert_id_map)
         # Kept across refreshes; newest first until a header is clicked.
         self.alert_sort = ("timestamp", True)
         self._update_alert_arrows()
@@ -1581,7 +1616,8 @@ class OSRSTrackerApp:
             "filter. Only items where both sides traded in the "
             "last 5 minutes; Suspect items are ignored. Each "
             "item alerts at most once an hour. Double-click a "
-            "row to open it in Search."))
+            "row to open it in Search, or right-click it for "
+            "more."))
         return frame
 
     def _alert_threshold(self) -> int:
@@ -1687,7 +1723,8 @@ class OSRSTrackerApp:
         return db.sync_profit_alerts(
             [r for r in rows
              if r["active"] and not r["slow"] and r["verdict"] != "Suspect"
-             and r["profit"] >= threshold],
+             and r["profit"] >= threshold
+             and r["item_id"] not in self._ignored],
             ALERT_COOLDOWN, fetched_at)
 
     def _tree_view_state(self, tree, id_map) -> tuple:
@@ -1774,7 +1811,7 @@ class OSRSTrackerApp:
 
     WATCH_COLUMNS = [
         # (tree id, header, sort key, width, anchor, descending on 1st click)
-        ("item",    "Item",        "name",    171, "w",      False),
+        ("item",    "Item",        "name",    240, "w",      False),
         ("buy",     "Buy (gp)",    "buy",     88,  "e",      True),
         ("sell",    "Sell (gp)",   "sell",    88,  "e",      True),
         ("target_below", "Buy ≤",  "target_below", 100, "e", True),
@@ -1804,7 +1841,8 @@ class OSRSTrackerApp:
                                            state="disabled",
                                            command=self._target_dialog)
         self.watch_target_btn.pack(side="left")
-        ttk.Label(bar, text="Add items with the ☆ button on a Search result.",
+        ttk.Label(bar, text="Add items by right-clicking them, or with ☆ on a "
+                            "Search result.",
                   style="Dim.TLabel").pack(side="left", padx=12)
         self.watch_note = tk.StringVar(value="")
         ttk.Label(bar, textvariable=self.watch_note, style="Dim.TLabel"
@@ -1829,6 +1867,7 @@ class OSRSTrackerApp:
         tree.bind("<<TreeviewSelect>>", self._on_watch_selected)
         self.watch_tree = tree
         self.watch_id_map = {}
+        self._add_row_menu(tree, self.watch_id_map)
         # Kept across refreshes; oldest added first until a header is clicked.
         self.watch_sort = ("added", False)
         self._update_watch_arrows()
@@ -1839,7 +1878,7 @@ class OSRSTrackerApp:
             "Margins use the "
             "same maths as FlipRec. Select a row and click Set "
             "target to be alerted at a price. Double-click a row "
-            "to open it in Search."))
+            "to open it in Search, or right-click it for more."))
         return frame
 
     def _render_watchlist(self):
@@ -1889,14 +1928,15 @@ class OSRSTrackerApp:
             hit_below, hit_above = hits.get(item_id, (False, False))
             below = fmt_target(target.get("target_below"), hit_below, fmt)
             above = fmt_target(target.get("target_above"), hit_above, fmt)
+            shown = IGNORED_TAG + name if item_id in self._ignored else name
             if row is None:
-                values = (name, "…" if not self._market else "N/A", "",
+                values = (shown, "…" if not self._market else "N/A", "",
                           below, above,
                           *[""] * (len(self.WATCH_COLUMNS) - 6), added_s)
                 tag = "dim"
             else:
                 values = (
-                    name, fmt(row["buy"]), fmt(row["sell"]), below, above,
+                    shown, fmt(row["buy"]), fmt(row["sell"]), below, above,
                     fmt(row["net"]), f"{row['roi']:.1f}%",
                     self._volume_text(item_id, row["volume"], fmt),
                     self._window_text(row["vol_12h"], 12 * 3600, fmt),
@@ -2078,8 +2118,7 @@ class OSRSTrackerApp:
             db.watchlist_remove(item["id"])
         else:
             db.watchlist_add(item["id"], item["name"])
-        self._update_watch_btn()
-        self._render_watchlist()
+        self._lists_changed()
 
     def _update_watch_btn(self):
         btn = getattr(self, "watch_btn", None)
@@ -2088,6 +2127,184 @@ class OSRSTrackerApp:
         on = db.watchlist_contains(self._search_item["id"])
         btn.config(text="★ On Watchlist (remove)" if on
                    else "☆ Add to Watchlist")
+
+    # ── Ignored List tab ──────────────────────────────────────────────────────
+
+    IGNORED_COLUMNS = [
+        # (tree id, header, sort key, width, anchor, descending on 1st click)
+        ("item",  "Item",  "name",  560, "w", False),
+        ("added", "Added", "added", 120, "w", True),
+    ]
+
+    def _build_ignored_tab(self) -> ttk.Frame:
+        frame = ttk.Frame(self.notebook)
+
+        bar = ttk.Frame(frame)
+        bar.pack(fill="x", padx=20, pady=(20, 10))
+        ttk.Button(bar, text="Remove from list",
+                   command=self._remove_selected_ignored).pack(side="left")
+        ttk.Label(bar, text="Hidden from FlipRec, Alerts and Volatile, and not "
+                            "suggested by Ask AI.",
+                  style="Dim.TLabel").pack(side="left", padx=12)
+
+        cols = tuple(c[0] for c in self.IGNORED_COLUMNS)
+        tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
+        for cid, label, key, width, anchor, desc in self.IGNORED_COLUMNS:
+            tree.heading(cid, text=label,
+                         command=lambda k=key, d=desc: self._sort_ignored(k, d))
+            tree.column(cid, width=width, anchor=anchor)
+        self._pack_table(frame, tree)
+        tree.bind("<Double-Button-1>",
+                  lambda _e: self._open_selected_in_search(
+                      self.ignored_tree, self.ignored_id_map))
+        self.ignored_tree = tree
+        self.ignored_id_map = {}
+        self._add_row_menu(tree, self.ignored_id_map)
+        # Newest first until a header is clicked.
+        self.ignored_sort = ("added", True)
+        self._update_ignored_arrows()
+
+        self._footnote(frame, tree, (
+            "Search and your Watchlist still show these items. "
+            "Double-click a row to open it in Search, or right-click "
+            "it for more."))
+        return frame
+
+    def _render_ignored(self):
+        tree = self.ignored_tree
+        view = self._tree_view_state(tree, self.ignored_id_map)
+        for r in tree.get_children():
+            tree.delete(r)
+        self.ignored_id_map.clear()
+        items = db.ignored_items()
+        if not items:
+            tree.insert("", "end", values=(
+                "Nothing ignored. Right-click an item on another tab and "
+                "choose Ignore item.", ""))
+            return
+        key, desc = self.ignored_sort
+        items.sort(key=(lambda i: i[1].lower()) if key == "name"
+                   else (lambda i: i[2]), reverse=desc)
+        for item_id, name, added in items:
+            added_s = time.strftime("%m/%d %H:%M", time.localtime(added))
+            iid = tree.insert("", "end", values=(name, added_s))
+            self.ignored_id_map[iid] = item_id
+        self._restore_tree_view(tree, self.ignored_id_map, view)
+
+    def _sort_ignored(self, key: str, default_desc: bool):
+        """Click a header to sort by it; click again to reverse."""
+        cur_key, cur_desc = self.ignored_sort
+        desc = (not cur_desc) if cur_key == key else default_desc
+        self.ignored_sort = (key, desc)
+        self._update_ignored_arrows()
+        self._render_ignored()
+
+    def _update_ignored_arrows(self):
+        key, desc = self.ignored_sort
+        arrow = " ▼" if desc else " ▲"
+        for cid, label, k, *_ in self.IGNORED_COLUMNS:
+            self.ignored_tree.heading(
+                cid, text=label + (arrow if k == key else ""))
+
+    def _remove_selected_ignored(self):
+        db.unignore_items([self.ignored_id_map[iid]
+                           for iid in self.ignored_tree.selection()
+                           if iid in self.ignored_id_map])
+        self._lists_changed()
+
+    def _ignore_items(self, items: list):
+        db.ignore_items(items)
+        self._lists_changed()
+
+    def _lists_changed(self):
+        """Redraw what the Watchlist and Ignored List affect."""
+        ignored = db.ignored_ids()
+        if ignored != self._ignored:
+            self._ignored = ignored
+            # An item taken off the list can alert again straight away.
+            if self._evaluate_alerts()[0]:
+                flash_window(self.root)
+            self._render_alerts()
+            self._render_ignored()
+            if self.flip_results:
+                self._render_fliprec_table()
+            self._redraw_volatile()
+        self._render_watchlist()
+        self._update_watch_btn()
+
+    # ── Right-click menu ──────────────────────────────────────────────────────
+
+    def _add_row_menu(self, tree, id_map):
+        """Right-click menu for a table with an "item" column."""
+        show = lambda e: self._show_row_menu(e, tree, id_map)
+        tree.bind("<Button-3>", show)
+        if sys.platform == "darwin":
+            tree.bind("<Button-2>", show)
+            tree.bind("<Control-Button-1>", show)
+
+    def _show_row_menu(self, event, tree, id_map):
+        # identify_row alone gives the first row for clicks low on a header.
+        clicked = tree.identify_row(event.y)
+        if (tree.identify_region(event.x, event.y) != "cell"
+                or clicked not in id_map):      # or a "list is empty" row
+            return
+        if clicked not in tree.selection():
+            tree.selection_set(clicked)
+        tree.focus(clicked)
+        menu = self._build_row_menu(tree, id_map, clicked)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _build_row_menu(self, tree, id_map, clicked) -> tk.Menu:
+        if self._row_menu:
+            self._row_menu.destroy()
+        menu = self._row_menu = tk.Menu(
+            tree, tearoff=0, bg=COLOR_PANEL, fg=COLOR_TEXT,
+            activebackground=COLOR_BORDER, activeforeground=COLOR_ACCENT_HI)
+
+        items = [(id_map[iid],
+                  str(tree.set(iid, "item")).removeprefix(IGNORED_TAG))
+                 for iid in tree.selection() if iid in id_map]
+        ids = [item_id for item_id, _name in items]
+        count = f"{len(items)} items" if len(items) > 1 else ""
+        watched = {row[0] for row in db.watchlist_items()}
+
+        def label(verb, rest):
+            return " ".join(filter(None, (verb, count, rest)))
+
+        if all(item_id in watched for item_id in ids):
+            menu.add_command(label=label("Remove", "from Watchlist"),
+                             command=lambda: self._remove_from_watchlist(ids))
+        else:
+            menu.add_command(label=label("Add", "to Watchlist"),
+                             command=lambda: self._add_to_watchlist(items))
+        if all(item_id in self._ignored for item_id in ids):
+            menu.add_command(label=label("Remove", "from Ignored List"),
+                             command=lambda: self._unignore(ids))
+        else:
+            menu.add_command(label=f"Ignore {count or 'item'}",
+                             command=lambda: self._ignore_items(items))
+        menu.add_separator()
+        item_id = id_map[clicked]
+        menu.add_command(label="Open in Search",
+                         command=lambda: self._open_in_search(item_id))
+        return menu
+
+    def _add_to_watchlist(self, items: list):
+        for item_id, name in items:
+            db.watchlist_add(item_id, name)
+        self._lists_changed()
+
+    def _remove_from_watchlist(self, item_ids: list):
+        for item_id in item_ids:
+            db.watchlist_remove(item_id)
+        self._lists_changed()
+
+    def _unignore(self, item_ids: list):
+        db.unignore_items(item_ids)
+        self._lists_changed()
 
     # ── Shared helpers ────────────────────────────────────────────────────────
 
@@ -2185,7 +2402,9 @@ class OSRSTrackerApp:
 
     def _open_selected_in_search(self, tree, id_map):
         sel = tree.selection()
-        item_id = id_map.get(sel[0]) if sel else None
+        self._open_in_search(id_map.get(sel[0]) if sel else None)
+
+    def _open_in_search(self, item_id):
         item = next((it for it in self.item_data
                      if it.get("id") == item_id), None) if item_id else None
         if not item:
@@ -2235,6 +2454,8 @@ class OSRSTrackerApp:
         ]
         self.volatile_sort = (None, None)  # (data_key, descending)
         self.volatile_results = []
+        self._volatile_all = []    # every mover from the last fetch, biggest first
+        self._volatile_window = ""
 
         cols = tuple(c[0] for c in self._volatile_columns)
         tree = ttk.Treeview(frame, columns=cols, show="headings", height=20)
@@ -2256,11 +2477,13 @@ class OSRSTrackerApp:
         tree.bind("<Double-Button-1>", self._on_volatile_click)
         self.volatile_tree = tree
         self.volatile_id_map = {}  # tree row id -> item id
+        self._add_row_menu(tree, self.volatile_id_map)
 
         self._footnote(frame, tree, (
             "Double-click a row to open its full price panel "
-            "in the Search tab. Items with under 1,000 traded "
-            "in the window are filtered out."))
+            "in the Search tab, or right-click it for more. "
+            "Items with under 1,000 traded in the window are "
+            "filtered out."))
         return frame
 
     def _refresh_volatile(self):
@@ -2277,7 +2500,7 @@ class OSRSTrackerApp:
             bulk = self._volume.averages(timestep)
             return analyzer.find_volatile_items(
                 latest, bulk, self.item_data,
-                min_volume=1000, top_n=100,
+                min_volume=1000, top_n=len(latest),
             )
 
         def done(results, err):
@@ -2286,13 +2509,33 @@ class OSRSTrackerApp:
                 self.volatile_status.set(f"Error: {err}")
                 return
             # Reset to "most volatile by abs movement" on every fresh fetch.
-            self.volatile_results = results
+            self._volatile_all = results
+            self._volatile_window = timestep
             self.volatile_sort = (None, None)
             self._update_sort_arrows()
+            self._select_volatile()
             self._render_volatile_table()
-            self.volatile_status.set(f"{len(results)} movers in {timestep} window")
 
         run_async(task, done)
+
+    def _select_volatile(self):
+        """The biggest movers from the last fetch that aren't ignored."""
+        self.volatile_results = [r for r in self._volatile_all
+                                 if r["item_id"] not in self._ignored
+                                 ][:VOLATILE_TOP]
+        self.volatile_status.set(f"{len(self.volatile_results)} movers in "
+                                 f"{self._volatile_window} window")
+
+    def _redraw_volatile(self):
+        """After the Ignored List changes, keeping your sort and place."""
+        if not self._volatile_all:
+            return
+        tree = self.volatile_tree
+        view = self._tree_view_state(tree, self.volatile_id_map)
+        self._select_volatile()
+        self._order_volatile()
+        self._render_volatile_table()
+        self._restore_tree_view(tree, self.volatile_id_map, view)
 
     def _sort_volatile(self, key: str, default_desc: bool):
         """Click handler for a column header — sort results by `key`."""
@@ -2302,21 +2545,25 @@ class OSRSTrackerApp:
         else:
             new_desc = default_desc
         self.volatile_sort = (key, new_desc)
+        self._order_volatile()
+        self._update_sort_arrows()
+        self._render_volatile_table()
 
+    def _order_volatile(self):
+        key, desc = self.volatile_sort
+        if key is None:
+            return
         # Case-insensitive sort for strings, numeric for everything else.
         if key == "name":
             self.volatile_results.sort(
                 key=lambda r: r["name"].lower(),
-                reverse=new_desc,
+                reverse=desc,
             )
         else:
             self.volatile_results.sort(
                 key=lambda r: r.get(key, 0),
-                reverse=new_desc,
+                reverse=desc,
             )
-
-        self._update_sort_arrows()
-        self._render_volatile_table()
 
     def _update_sort_arrows(self):
         """Refresh the heading text on each column to show the active sort arrow."""
@@ -2471,6 +2718,7 @@ class OSRSTrackerApp:
         tree.bind("<Double-Button-1>", self._on_fliprec_click)
         self.flip_tree = tree
         self.flip_id_map = {}
+        self._add_row_menu(tree, self.flip_id_map)
         self.flip_results = []        # computed for the current filters
         self.flip_sort = (None, None)
         self._flip_raw = None         # (latest, bulk_1h, fetched_at, bulk_5m)
@@ -2486,7 +2734,7 @@ class OSRSTrackerApp:
             "only: offers can take time to fill and margins "
             "close quickly. Inactive = a side has not traded in "
             "the last hour. Double-click a row to open it in "
-            "Search."))
+            "Search, or right-click it for more."))
         return frame
 
     def _flip_membership(self) -> str:
@@ -2591,8 +2839,10 @@ class OSRSTrackerApp:
         show = self.flip_verdict_var.get()
         # Choosing "Inactive" in the Show filter overrides Hide inactive.
         hide = self.flip_hide_inactive_var.get() and show != "Inactive"
-        inactive = [r for r in self.flip_results if not r["active"]]
-        rows = [r for r in self.flip_results
+        results = [r for r in self.flip_results
+                   if r["item_id"] not in self._ignored]
+        inactive = [r for r in results if not r["active"]]
+        rows = [r for r in results
                 if (r["active"] or not hide)
                 and (show == "All verdicts" or r["verdict"] == show)
                 ][:FLIP_MAX_ROWS]
@@ -3756,6 +4006,8 @@ class OSRSTrackerApp:
             self._render_alerts()
         elif tab is self.watchlist_tab:
             self._render_watchlist()
+        elif tab is self.ignored_tab:
+            self._render_ignored()
         elif tab is self.volatile_tab:
             # Auto-refresh on first visit; subsequent visits keep the table
             # so the user doesn't pay the API cost on every tab switch.

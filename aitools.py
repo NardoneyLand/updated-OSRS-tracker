@@ -248,6 +248,8 @@ class MarketTools:
         rows = analyzer.find_flips(latest, bulk, self._mapping(),
                                    capital=capital, membership=membership,
                                    bulk_5m=bulk_5m)
+        ignored = db.ignored_ids()
+        rows = [r for r in rows if r["item_id"] not in ignored]
 
         verdict = _choice(args, "verdict", VERDICTS)
         if verdict:
@@ -304,6 +306,7 @@ class MarketTools:
 
         return {
             "name": item["name"],
+            "on_ignored_list": item_id in db.ignored_ids(),
             "members_item": bool(item.get("members")),
             "buy_limit": item.get("limit"),
             "high_alch": item.get("highalch"),
@@ -333,6 +336,8 @@ class MarketTools:
             raise ToolError("Could not fetch live prices from the OSRS Wiki.")
         rows = analyzer.find_volatile_items(latest, bulk, self._mapping(),
                                             min_volume=1000, top_n=MOVER_POOL)
+        ignored = db.ignored_ids()
+        rows = [r for r in rows if r["item_id"] not in ignored]
         direction = args.get("direction")
         if direction == "up":
             rows = [r for r in rows if r["pct_change"] > 0]
@@ -352,6 +357,7 @@ class MarketTools:
         capital = _user_capital()
         watched = db.watchlist_items()
         targets = db.watchlist_targets()
+        ignored = db.ignored_ids()
         watchlist = []
         if watched:
             latest, bulk, _, bulk_5m = self._latest_market()
@@ -365,6 +371,7 @@ class MarketTools:
                        if lt and item else None)
                 entry = (_flip_summary(row) if row
                          else {"name": item_name, "verdict": "No price"})
+                entry["on_ignored_list"] = item_id in ignored
                 target = targets.get(item_id)
                 if target:
                     entry["target_buy_at_or_below"] = target["target_below"]

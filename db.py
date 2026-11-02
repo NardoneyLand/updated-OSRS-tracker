@@ -1,5 +1,6 @@
 """
-db.py — SQLite database for price history, profit alerts, watchlist, and news cache.
+db.py — SQLite database for price history, profit alerts, watchlist, Ignored List
+and news cache.
 """
 
 import sqlite3
@@ -50,6 +51,12 @@ def initialize_db():
             ON profit_alerts (item_id, timestamp);
 
         CREATE TABLE IF NOT EXISTS watchlist (
+            item_id    INTEGER PRIMARY KEY,
+            item_name  TEXT    NOT NULL,
+            added_ts   INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ignored_items (
             item_id    INTEGER PRIMARY KEY,
             item_name  TEXT    NOT NULL,
             added_ts   INTEGER NOT NULL
@@ -292,6 +299,7 @@ def get_active_alerts() -> List[dict]:
         "      FROM profit_alerts WHERE dismissed = 0 GROUP BY item_id) c "
         "  ON a.id = c.mid "
         "WHERE a.expired = 0 "
+        "  AND a.item_id NOT IN (SELECT item_id FROM ignored_items) "
         "ORDER BY a.timestamp DESC"
     ).fetchall()
     conn.close()
@@ -419,6 +427,44 @@ def watchlist_mark_seen(seen: List[Tuple], ts: float):
                      (int(ts), item_id))
     conn.commit()
     conn.close()
+
+
+# ── Ignored List ──────────────────────────────────────────────────────────────
+
+def ignore_items(items: List[Tuple]):
+    """Ignore (item_id, item_name) pairs. The Watchlist isn't affected."""
+    now = int(time.time())
+    conn = get_connection()
+    conn.executemany(
+        "INSERT OR IGNORE INTO ignored_items (item_id, item_name, added_ts) "
+        "VALUES (?, ?, ?)", [(item_id, name, now) for item_id, name in items])
+    conn.commit()
+    conn.close()
+
+
+def unignore_items(item_ids: List[int]):
+    conn = get_connection()
+    conn.executemany("DELETE FROM ignored_items WHERE item_id = ?",
+                     [(item_id,) for item_id in item_ids])
+    conn.commit()
+    conn.close()
+
+
+def ignored_items() -> List[Tuple]:
+    """(item_id, item_name, added_ts), oldest first."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT item_id, item_name, added_ts FROM ignored_items "
+        "ORDER BY added_ts").fetchall()
+    conn.close()
+    return [tuple(r) for r in rows]
+
+
+def ignored_ids() -> set:
+    conn = get_connection()
+    rows = conn.execute("SELECT item_id FROM ignored_items").fetchall()
+    conn.close()
+    return {r[0] for r in rows}
 
 
 # ── News cache ────────────────────────────────────────────────────────────────

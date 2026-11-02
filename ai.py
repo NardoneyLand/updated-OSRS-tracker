@@ -77,6 +77,11 @@ was falling gave up gains, because prices tend to partly reverse. Those reversal
 are usually smaller than the 2% tax, so a falling price isn't a reason to buy \
 either. Don't treat a recent move as a signal. Base suggestions on after-tax \
 margins, volume and how recently an item traded.
+- The user keeps an Ignored List of items they don't want suggested. Those items \
+are left out of the flips, movers and alerts your tools return. They can still \
+appear on the user's Watchlist or when asked about by name, with on_ignored_list \
+set to true. Whenever you mention such an item, say that it's on their Ignored \
+List, and don't suggest flipping it.
 
 Give specific suggestions with the numbers behind them, and say when the data is \
 thin or a margin looks unreliable. Offers can take time to fill and margins can \

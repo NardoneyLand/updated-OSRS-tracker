@@ -5,7 +5,7 @@ flips (after the GE tax), alerting you to big opportunities, and tracking
 prices and news. Built with Tkinter, with a Windows installer and a macOS disk image
 on the Releases page.
 
-Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** · **Ask AI** · **News** · **Help**
+Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Ignored List** · **Volatile** · **Search** · **Ask AI** · **News** · **Help**
 
 ---
 
@@ -13,7 +13,8 @@ Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** �
 
 - **FlipRec** — every item you can buy and resell at a profit after the 2% GE tax, priced like an in-game margin check. Capital-aware quantity and profit estimates, the gp you need up front, buy limits, volume, last-trade age, Profitable / Marginal / Suspect / Inactive verdicts, and a note on how far the price is from its 1-hour average.
 - **Profit alerts** — checks the market every 1, 5, 15 or 30 minutes (1 by default) and alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and, on Windows, a taskbar flash. Alerts keep updating with live prices and disappear once the flip stops qualifying.
-- **Watchlist** — add items from Search, follow their live margins, and set target prices to be alerted when an item's Buy price falls to one or its Sell price rises to one.
+- **Watchlist** — add items by right-clicking them in a table or from Search, follow their live margins, and set target prices to be alerted when an item's Buy price falls to one or its Sell price rises to one.
+- **Ignored List** — right-click an item you don't want to see to hide it from FlipRec, Alerts and Volatile, and stop Ask AI suggesting it. It's listed on its own tab, where you can bring it back. Search still finds it, and if it's on your Watchlist it stays there with an Ignored tag.
 - **Volatile scanner** — the biggest movers across the whole GE over 5m / 1h / 6h / 24h.
 - **Item search + price chart** — autocomplete lookup with the item's recent price move, volume and momentum, plus the item's price chart (1H to 1 year, backed by the OSRS Wiki's history) on the same page.
 - **Ask AI** — ask an AI for suggestions using your own API key from Anthropic, OpenAI, OpenRouter, or any service with an OpenAI-compatible API. The AI can look up live flips, big movers, item history, your Watchlist, your alerts and the news, but it can't change anything or place trades. Save your own instructions to get answers in the same format every time.
@@ -134,7 +135,7 @@ This builds the `.app` and packages it in `dist/`, for testing only. Don't publi
 ```
 gui.py              Tkinter app — entry point
 api.py              OSRS Wiki Prices API wrapper
-db.py               SQLite layer (price history, alerts, watchlist, news cache, volumes)
+db.py               SQLite layer (price history, alerts, watchlist, Ignored List, news cache, volumes)
 search.py           Fuzzy item search
 analyzer.py         Trend, market facts, flip and volatility logic
 ai.py               Ask AI: API keys and the chat loops for each kind of API
@@ -177,7 +178,7 @@ tests/backtest.py   Replays a Buy/Sell rule over real history. Run it before add
 
 - **What's new:** see the [changelog](CHANGELOG.md).
 - **Help → Check for updates** looks for a newer GitHub release. On Windows it downloads the installer and updates the app in place; on macOS it opens the new `.dmg`, and you quit the app and drag the new version to Applications. When running from source, it offers to open the download page.
-- **Help → Open data folder** opens your settings, watchlist, alerts, price history and `osrs_tracker.log`. If something goes wrong, attach that log to a GitHub issue.
+- **Help → Open data folder** opens your settings, watchlist, Ignored List, alerts, price history and `osrs_tracker.log`. If something goes wrong, attach that log to a GitHub issue.
 
 ---
 

@@ -8,6 +8,7 @@ os.environ["OPENAI_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
 import tempfile, db, settings
 settings.SETTINGS_FILE = os.path.join(tempfile.mkdtemp(), 'settings.json')
 db.DB_NAME = os.path.join(tempfile.mkdtemp(), 't.db')
+db.initialize_db()
 import api, ai, aitools
 
 GO = threading.Event
