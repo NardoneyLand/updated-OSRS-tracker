@@ -3,6 +3,25 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.4 — 2026-11-01
+
+**Fixed**
+- A problem reading the settings file can no longer wipe your other settings when
+  you change one. The app tries again, and if it still can't read the file it
+  leaves it alone and shows a message. A damaged file is kept as
+  settings.json.bad.
+- A setting that can't be saved no longer shows an error box or stops the change
+  from applying. It lasts until you close the app, and a message says so.
+- If the settings file can't be read at startup, the app waits briefly and then
+  offers Retry or Cancel. Before, it asked for your contact again and showed blank
+  settings, and clicking out of the Capital box could save over your real one.
+- The app now tells you at startup if your settings file was damaged.
+- The "Settings not saved" message has its own row, so a long status can't cut it
+  off.
+- Narrow windows no longer squeeze or hide things. Toolbar buttons move to a second
+  row, tables keep their column widths and get a sideways scrollbar, and the notes
+  under tables wrap to fit and stay visible in short windows.
+
 ## 1.4.3 — 2026-11-01
 
 **Changed**

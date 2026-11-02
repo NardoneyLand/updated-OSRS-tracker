@@ -141,6 +141,12 @@ def rows():
     return [app.alerts_tree.item(i, "values") for i in app.alerts_tree.get_children() if i in app.alert_id_map]
 
 
+def steady(table):
+    """Rows without Last trade, whose age ticks up by itself every second."""
+    age = next(i for i, c in enumerate(gui.OSRSTrackerApp.ALERT_COLUMNS) if c[0] == "age")
+    return [row[:age] + row[age + 1:] for row in table]
+
+
 def check_now():
     app._monitor_tick()
     settle()
@@ -153,7 +159,8 @@ def scenario():
         settle()
         check(app.alert_interval_var.get() == "1 min", "default refresh is 1 minute")
         check(list(gui.ALERT_INTERVALS.values()) == [60, 300, 900, 1800], "rates are 1, 5, 15 and 30 minutes")
-        combo = next(w for w in app.alerts_tab.winfo_children()[0].winfo_children() if isinstance(w, ttk.Combobox) and w.cget("textvariable") == str(app.alert_interval_var))
+        filters = app.alerts_check_btn.master.master.winfo_children()[0]
+        combo = next(w for w in filters.winfo_children() if isinstance(w, ttk.Combobox) and w.cget("textvariable") == str(app.alert_interval_var))
         check(tuple(combo.cget("values")) == ("1 min", "5 min", "15 min", "30 min") and str(combo.cget("state")) == "readonly", "dropdown choices")
 
         # A big flip fires, and its numbers follow the market
@@ -232,17 +239,17 @@ def scenario():
         keep_latest = MARKET["latest"]
         MARKET["latest"] = {}
         check_now()
-        check(rows() == good and "Check failed" in app.alerts_status.get() and "Alerts show prices from" in app.alerts_status.get(), "failed check keeps alerts and says so: " + app.alerts_status.get())
+        check(steady(rows()) == steady(good) and "Check failed" in app.alerts_status.get() and "Alerts show prices from" in app.alerts_status.get(), "failed check keeps alerts and says so: " + app.alerts_status.get())
         # ...and neither must volumes failing with nothing to fall back on
         MARKET["latest"] = keep_latest
         keep_bulk = MARKET["bulk"]
         MARKET["bulk"] = {}
         app._volume._fallbacks.clear()
         check_now()
-        check(rows() == good and "Check failed" in app.alerts_status.get(), "no volumes: alerts aren't all expired")
+        check(steady(rows()) == steady(good) and "Check failed" in app.alerts_status.get(), "no volumes: alerts aren't all expired")
         # A FlipRec refresh that got no volumes can't expire them either
         app._market = (keep_latest, {}, time.time(), {})
-        check(app._evaluate_alerts() == (0, 0) and rows() == good, "snapshot with no volumes is ignored")
+        check(app._evaluate_alerts() == (0, 0) and steady(rows()) == steady(good), "snapshot with no volumes is ignored")
         MARKET["bulk"] = keep_bulk
         app._volume._fallbacks.clear()
 

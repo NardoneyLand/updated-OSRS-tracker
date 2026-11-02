@@ -564,6 +564,14 @@ HELP_SECTIONS = [
      "price history. They're stored on your computer in:\n\n"
      "    •  Windows: %APPDATA%\\OSRS Tracker\n"
      "    •  macOS: ~/Library/Application Support/OSRS Tracker\n\n"
+     "If settings can't be saved, such as when another program has the file "
+     "open, a red message appears at the top of the app. Your changes last until "
+     "you close it, and your other settings aren't touched. If the file can't "
+     "be read when the app starts, it waits briefly, then lets you retry or "
+     "close the app, so it never starts without your settings by accident. If "
+     "the settings file is ever damaged, the app keeps a copy as "
+     "settings.json.bad, tells you if this happens at startup, and starts again "
+     "with default settings.\n\n"
      "Ask AI keys are the exception: they stay in your computer's credential "
      "store."),
 
@@ -588,6 +596,10 @@ HELP_SECTIONS = [
 ]
 
 
+FOOTNOTE_WIDTH = 1000         # the longest line under a table, in pixels
+FLIP_STATUS_ROOM = 200        # room for "Prices fetched at 12:00:00"
+
+
 # ── Main Application ──────────────────────────────────────────────────────────
 
 class OSRSTrackerApp:
@@ -608,6 +620,7 @@ class OSRSTrackerApp:
         self._volume_loaded = False    # the first download has finished
         self._search_volume = None     # (frame, item_id, cells) showing the table
         self._search_trade = None      # (label, high time, low time)
+        self.settings_warning = tk.StringVar(value="")
         self._search_item = None       # item shown in the Search panel
         self._search_shown = None      # what the panel was last drawn from
         self._lookup_seq = 0           # latest Search lookup (see _lookup_item)
@@ -616,6 +629,9 @@ class OSRSTrackerApp:
         # once, instead of failing silently in the windowed app.
         self.root.report_callback_exception = self._on_tk_error
 
+        if not self._check_settings():
+            self.root.destroy()
+            return
         self._configure_root()
         self._build_ui()
 
@@ -631,6 +647,40 @@ class OSRSTrackerApp:
         self._volume.start()
         self._load_mapping_async()
         self._refresh_news_from_sources()   # news is ready before you open it
+
+    def _check_settings(self) -> bool:
+        """Read the settings before building anything from them. Starting from
+        blanks would ask for the contact again and let the tabs save defaults
+        over the real values. False = quit."""
+        while True:
+            try:
+                damaged = settings.check_at_launch()
+                break
+            except OSError:
+                applog.log.warning("Could not read settings", exc_info=True)
+                self.root.withdraw()
+                if not messagebox.askretrycancel(
+                        "Settings can't be read",
+                        "Your settings file can't be opened right now, usually "
+                        "because another program is using it.\n\n"
+                        "Wait a moment or close that program, then choose "
+                        "Retry. Cancel closes the app and leaves your settings "
+                        "as they are.\n\n"
+                        "If this keeps happening, restart your computer. To "
+                        "start again with default settings, move this file "
+                        f"somewhere else:\n{settings.SETTINGS_FILE}"):
+                    return False
+        if damaged:
+            applog.log.warning("Settings file was damaged and set aside")
+            self.root.withdraw()
+            messagebox.showwarning(
+                "Settings were damaged",
+                "Your settings file is damaged, so the app is starting with "
+                "default settings.\n\nA copy was kept as settings.json.bad in "
+                "your data folder.")
+        if self.root.state() == "withdrawn":
+            self.root.deiconify()
+        return True
 
     # ── Contact / User-Agent setup ────────────────────────────────────────────
 
@@ -707,7 +757,7 @@ class OSRSTrackerApp:
                 return
             cleaned = useragent.clean_contact(var.get())
             useragent.set_contact(cleaned)
-            settings.save({"ua_contact": cleaned})
+            self._save_settings({"ua_contact": cleaned})
             self._update_contact_label()
             result["ok"] = True
             dlg.destroy()
@@ -737,6 +787,19 @@ class OSRSTrackerApp:
         dlg.geometry(f"+{x}+{y}")
         dlg.grab_set()
         dlg.lift()
+
+    def _save_settings(self, values: dict):
+        """Save settings for next time. If that can't happen right now the
+        change still applies until the app closes, so don't stop what the
+        user asked for: just tell them it won't last."""
+        try:
+            settings.save(values)
+        except OSError:
+            applog.log.warning("Could not save settings", exc_info=True)
+            self.settings_warning.set(
+                "Settings not saved. Changes last until you close the app.")
+        else:
+            self.settings_warning.set("")
 
     def _update_contact_label(self):
         if hasattr(self, "contact_label_var"):
@@ -883,11 +946,12 @@ class OSRSTrackerApp:
                   foreground=[("selected", COLOR_ACCENT_HI)])
 
         # Scrollbar
-        style.configure("Vertical.TScrollbar",
-                        background=COLOR_PANEL_HI,
-                        troughcolor=COLOR_PANEL,
-                        bordercolor=COLOR_BORDER,
-                        arrowcolor=COLOR_ACCENT)
+        for name in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+            style.configure(name,
+                            background=COLOR_PANEL_HI,
+                            troughcolor=COLOR_PANEL,
+                            bordercolor=COLOR_BORDER,
+                            arrowcolor=COLOR_ACCENT)
 
     def _build_ui(self):
         # Header bar
@@ -903,6 +967,18 @@ class OSRSTrackerApp:
         # Subtle divider
         divider = tk.Frame(self.root, bg=COLOR_BORDER, height=1)
         divider.pack(side="top", fill="x", padx=20)
+
+        # Its own row, so a long status can't cut it off. Only there when needed.
+        warning = tk.Label(self.root, textvariable=self.settings_warning,
+                           bg=COLOR_BG, fg=COLOR_RED, font=FONT_BODY, anchor="e")
+
+        def show_warning(*_):
+            if self.settings_warning.get():
+                warning.pack(side="top", fill="x", padx=20, pady=(0, 6),
+                             before=divider)
+            else:
+                warning.pack_forget()
+        self.settings_warning.trace_add("write", show_warning)
 
         # Notebook
         self.notebook = ttk.Notebook(self.root)
@@ -1416,11 +1492,12 @@ class OSRSTrackerApp:
 
         bar = ttk.Frame(frame)
         bar.pack(fill="x", padx=20, pady=(20, 6))
-        ttk.Label(bar, text="Alert when est. profit ≥", style="TLabel"
+        filters = ttk.Frame(bar)
+        ttk.Label(filters, text="Alert when est. profit ≥", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         saved = settings.load().get("alert_threshold", ALERT_DEFAULT_THRESHOLD)
         self.alert_threshold_var = tk.StringVar(value=f"{int(saved):,}")
-        spin = ttk.Spinbox(bar, textvariable=self.alert_threshold_var,
+        spin = ttk.Spinbox(filters, textvariable=self.alert_threshold_var,
                            values=ALERT_THRESHOLD_STEPS, state="readonly",
                            width=13, wrap=False)
         spin.pack(side="left", padx=(0, 4))
@@ -1432,32 +1509,34 @@ class OSRSTrackerApp:
         self._threshold_job = None
         self.alert_threshold_var.trace_add(
             "write", lambda *_: self._schedule_threshold_change())
-        ttk.Label(bar, text="gp", style="TLabel").pack(side="left",
+        ttk.Label(filters, text="gp", style="TLabel").pack(side="left",
                                                        padx=(0, 16))
-        ttk.Label(bar, text="Refresh:", style="TLabel"
+        ttk.Label(filters, text="Refresh:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         interval = settings.load().get("alert_interval")
         self.alert_interval_var = tk.StringVar(
             value=interval if interval in ALERT_INTERVALS
             else ALERT_DEFAULT_INTERVAL)
         interval_combo = ttk.Combobox(
-            bar, textvariable=self.alert_interval_var, state="readonly",
+            filters, textvariable=self.alert_interval_var, state="readonly",
             width=7, values=list(ALERT_INTERVALS))
         interval_combo.pack(side="left", padx=(0, 16))
         interval_combo.bind("<<ComboboxSelected>>",
                             lambda _e: self._on_alert_interval_changed())
 
-        self._price_format_picker(bar, self.flip_format_var,
+        self._price_format_picker(filters, self.flip_format_var,
                                   self._on_price_format_changed)
 
+        actions = ttk.Frame(bar)
         self.alerts_check_btn = ttk.Button(
-            bar, text="Check now", command=self._monitor_tick)
+            actions, text="Check now", command=self._monitor_tick)
         self.alerts_check_btn.pack(side="left", padx=(0, 8))
-        ttk.Button(bar, text="Dismiss selected",
+        ttk.Button(actions, text="Dismiss selected",
                    command=self._dismiss_selected_alerts
                    ).pack(side="left", padx=(0, 8))
-        ttk.Button(bar, text="Dismiss all",
+        ttk.Button(actions, text="Dismiss all",
                    command=self._dismiss_all_alerts).pack(side="left")
+        self._wrap_toolbar(bar, filters, actions)
 
         # Own line, so the status isn't pushed off the edge of the bar.
         self.alerts_status = tk.StringVar(value="Waiting for first check…")
@@ -1471,7 +1550,7 @@ class OSRSTrackerApp:
                          command=lambda k=key, d=desc: self._sort_alerts(k, d))
             tree.column(cid, width=width, anchor=anchor)
         tree.tag_configure("alert", foreground=COLOR_GREEN)
-        tree.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        self._pack_table(frame, tree)
         tree.bind("<Double-Button-1>",
                   lambda _e: self._open_selected_in_search(
                       self.alerts_tree, self.alert_id_map))
@@ -1481,16 +1560,14 @@ class OSRSTrackerApp:
         self.alert_sort = ("timestamp", True)
         self._update_alert_arrows()
 
-        ttk.Label(frame,
-                  text=("Prices update with every check while the app is "
-                        "open, and an alert disappears once the flip stops "
-                        "qualifying. Uses your FlipRec capital and item "
-                        "filter. Only items where both sides traded in the "
-                        "last 5 minutes; Suspect items are ignored. Each "
-                        "item alerts at most once an hour. Double-click a "
-                        "row to open it in Search."),
-                  style="Dim.TLabel", wraplength=1000, justify="center"
-                  ).pack(side="bottom", before=tree, pady=(0, 10))
+        self._footnote(frame, tree, (
+            "Prices update with every check while the app is "
+            "open, and an alert disappears once the flip stops "
+            "qualifying. Uses your FlipRec capital and item "
+            "filter. Only items where both sides traded in the "
+            "last 5 minutes; Suspect items are ignored. Each "
+            "item alerts at most once an hour. Double-click a "
+            "row to open it in Search."))
         return frame
 
     def _alert_threshold(self) -> int:
@@ -1507,7 +1584,7 @@ class OSRSTrackerApp:
 
     def _on_alert_threshold_changed(self):
         self._threshold_job = None
-        settings.save({"alert_threshold": self._alert_threshold()})
+        self._save_settings({"alert_threshold": self._alert_threshold()})
         # Re-check the last market snapshot right away with the new threshold.
         if self._evaluate_alerts()[0]:
             flash_window(self.root)
@@ -1523,7 +1600,7 @@ class OSRSTrackerApp:
         return max(ALERT_MIN_STALE, 2 * self._alert_interval())
 
     def _on_alert_interval_changed(self):
-        settings.save({"alert_interval": self.alert_interval_var.get()})
+        self._save_settings({"alert_interval": self.alert_interval_var.get()})
         if self._monitor_started:
             self._monitor_tick()       # check now, then on the new timer
 
@@ -1730,7 +1807,7 @@ class OSRSTrackerApp:
         tree.tag_configure("dim", foreground=COLOR_DIM)
         tree.tag_configure("target", foreground=COLOR_ACCENT_HI,
                            background=COLOR_TARGET_ROW)
-        tree.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        self._pack_table(frame, tree)
         tree.bind("<Double-Button-1>",
                   lambda _e: self._open_selected_in_search(
                       self.watch_tree, self.watch_id_map))
@@ -1741,15 +1818,13 @@ class OSRSTrackerApp:
         self.watch_sort = ("added", False)
         self._update_watch_arrows()
 
-        ttk.Label(frame,
-                  text=("Prices refresh with every market check (see Refresh "
-                        "on the Alerts tab) or when you click Refresh here. "
-                        "Margins use the "
-                        "same maths as FlipRec. Select a row and click Set "
-                        "target to be alerted at a price. Double-click a row "
-                        "to open it in Search."),
-                  style="Dim.TLabel", wraplength=1000, justify="center"
-                  ).pack(pady=(0, 10))
+        self._footnote(frame, tree, (
+            "Prices refresh with every market check (see Refresh "
+            "on the Alerts tab) or when you click Refresh here. "
+            "Margins use the "
+            "same maths as FlipRec. Select a row and click Set "
+            "target to be alerted at a price. Double-click a row "
+            "to open it in Search."))
         return frame
 
     def _render_watchlist(self):
@@ -2011,6 +2086,55 @@ class OSRSTrackerApp:
         return (fmt_gp_exact if self.search_format_var.get().startswith("Exact")
                 else fmt_gp)
 
+    def _wrap_toolbar(self, bar, left, right, right_width=None):
+        """Two groups of controls: on one row while they fit, otherwise two
+        rows, so a narrow window can't squeeze a button away. right_width is
+        how much room the right group needs, if that isn't its current size:
+        a status changing mustn't make the bar jump."""
+        left.grid(row=0, column=0, sticky="w")
+        right.grid(row=0, column=1, sticky="w")
+        bar.columnconfigure(1, weight=1)
+
+        def place(event):
+            needed = right_width() if right_width else right.winfo_reqwidth()
+            if event.width >= left.winfo_reqwidth() + needed:
+                right.grid(row=0, column=1, columnspan=1, sticky="w", pady=0)
+            else:
+                right.grid(row=1, column=0, columnspan=2, sticky="w",
+                           pady=(8, 0))
+        bar.bind("<Configure>", place)
+
+    def _pack_table(self, frame, tree, bottom=10):
+        """Fill a tab with a table. Columns keep their full width, with a
+        scrollbar below if the window is too narrow to show them all, so no
+        value is cut off or out of reach."""
+        for column in tree["columns"]:
+            tree.column(column, minwidth=tree.column(column, "width"))
+        scrollbar = ttk.Scrollbar(frame, orient="horizontal",
+                                  command=tree.xview)
+
+        def on_scroll(first, last):
+            scrollbar.set(first, last)
+            if float(first) <= 0 and float(last) >= 1:
+                if scrollbar.winfo_manager():
+                    scrollbar.pack_forget()
+                    tree.pack_configure(pady=(0, bottom))
+            elif not scrollbar.winfo_manager():
+                tree.pack_configure(pady=0)
+                scrollbar.pack(side="bottom", fill="x", padx=20,
+                               pady=(0, bottom), before=tree)
+        tree.configure(xscrollcommand=on_scroll)
+        tree.pack(fill="both", expand=True, padx=20, pady=(0, bottom))
+
+    def _footnote(self, frame, table, text):
+        """The note under a table. A short window shrinks the table rather
+        than cutting this off, and it wraps to the width of the tab."""
+        note = ttk.Label(frame, text=text, style="Dim.TLabel",
+                         justify="center", wraplength=FOOTNOTE_WIDTH)
+        note.pack(side="bottom", before=table, pady=(0, 10))
+        frame.bind("<Configure>", lambda e: note.configure(
+            wraplength=max(200, min(FOOTNOTE_WIDTH, e.width - 40))))
+
     def _price_format_picker(self, bar, var, on_change, trailing=16):
         """'Prices:' dropdown. FlipRec and Alerts share one setting, so
         changing either updates both; Search has its own."""
@@ -2022,7 +2146,7 @@ class OSRSTrackerApp:
         combo.bind("<<ComboboxSelected>>", lambda _e: on_change())
 
     def _on_price_format_changed(self):
-        settings.save({"flip_price_format": self.flip_format_var.get()})
+        self._save_settings({"flip_price_format": self.flip_format_var.get()})
         # Only the display changes, so redraw without re-sorting.
         if self.flip_results:
             self._render_fliprec_table()
@@ -2030,7 +2154,7 @@ class OSRSTrackerApp:
         self._render_watchlist()
 
     def _on_search_format_changed(self):
-        settings.save({"search_price_format": self.search_format_var.get()})
+        self._save_settings({"search_price_format": self.search_format_var.get()})
         # Only the display changes, so redraw without fetching anything.
         if self._search_shown:
             self._render_result(**self._search_shown)
@@ -2105,17 +2229,15 @@ class OSRSTrackerApp:
         tree.tag_configure("up", foreground=COLOR_GREEN)
         tree.tag_configure("down", foreground=COLOR_RED)
 
-        tree.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        self._pack_table(frame, tree)
         tree.bind("<Double-Button-1>", self._on_volatile_click)
         self.volatile_tree = tree
         self.volatile_id_map = {}  # tree row id -> item id
 
-        ttk.Label(frame,
-                  text=("Double-click a row to open its full price panel "
-                        "in the Search tab. Items with under 1,000 traded "
-                        "in the window are filtered out."),
-                  style="Dim.TLabel"
-                  ).pack(pady=(0, 10))
+        self._footnote(frame, tree, (
+            "Double-click a row to open its full price panel "
+            "in the Search tab. Items with under 1,000 traded "
+            "in the window are filtered out."))
         return frame
 
     def _refresh_volatile(self):
@@ -2252,21 +2374,22 @@ class OSRSTrackerApp:
 
         bar = ttk.Frame(frame)
         bar.pack(fill="x", padx=20, pady=(20, 6))
+        filters = ttk.Frame(bar)
 
-        ttk.Label(bar, text="Capital:", style="TLabel"
+        ttk.Label(filters, text="Capital:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         self.flip_capital_var = tk.StringVar(value=prefs.get("capital", ""))
-        cap_entry = ttk.Entry(bar, textvariable=self.flip_capital_var, width=12)
+        cap_entry = ttk.Entry(filters, textvariable=self.flip_capital_var, width=12)
         cap_entry.pack(side="left", padx=(0, 16))
         cap_entry.bind("<Return>", lambda _e: self._apply_flip_filters())
         cap_entry.bind("<FocusOut>", lambda _e: self._apply_flip_filters())
 
-        ttk.Label(bar, text="Items:", style="TLabel"
+        ttk.Label(filters, text="Items:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         self.flip_members_var = tk.StringVar(
             value=prefs.get("flip_membership", "All items"))
         mem_combo = ttk.Combobox(
-            bar, textvariable=self.flip_members_var, state="readonly",
+            filters, textvariable=self.flip_members_var, state="readonly",
             width=14, values=["All items", "Members only", "F2P only"])
         mem_combo.pack(side="left", padx=(0, 16))
         mem_combo.bind("<<ComboboxSelected>>",
@@ -2274,33 +2397,37 @@ class OSRSTrackerApp:
 
         self.flip_hide_inactive_var = tk.BooleanVar(
             value=prefs.get("flip_hide_inactive", True))
-        ttk.Checkbutton(bar, text="Hide inactive",
+        ttk.Checkbutton(filters, text="Hide inactive",
                         variable=self.flip_hide_inactive_var,
                         command=self._apply_flip_filters
                         ).pack(side="left", padx=(0, 16))
 
-        self._price_format_picker(bar, self.flip_format_var,
+        self._price_format_picker(filters, self.flip_format_var,
                                   self._on_price_format_changed)
 
-        ttk.Label(bar, text="Show:", style="TLabel"
+        ttk.Label(filters, text="Show:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         self.flip_verdict_var = tk.StringVar(
             value=prefs.get("flip_verdict", "All verdicts"))
         verdict_combo = ttk.Combobox(
-            bar, textvariable=self.flip_verdict_var, state="readonly",
+            filters, textvariable=self.flip_verdict_var, state="readonly",
             width=12, values=["All verdicts", "Profitable", "Marginal",
                               "Suspect", "Inactive"])
         verdict_combo.pack(side="left", padx=(0, 16))
         verdict_combo.bind("<<ComboboxSelected>>",
                            lambda _e: self._apply_flip_filters())
 
+        actions = ttk.Frame(bar)
         self.flip_refresh_btn = ttk.Button(
-            bar, text="Refresh", command=self._refresh_fliprec)
+            actions, text="Refresh", command=self._refresh_fliprec)
         self.flip_refresh_btn.pack(side="left")
 
         self.flip_status = tk.StringVar(value="")
-        ttk.Label(bar, textvariable=self.flip_status, style="Dim.TLabel"
+        ttk.Label(actions, textvariable=self.flip_status, style="Dim.TLabel"
                   ).pack(side="left", padx=12)
+        self._wrap_toolbar(
+            bar, filters, actions,
+            lambda: self.flip_refresh_btn.winfo_reqwidth() + FLIP_STATUS_ROOM)
 
         # Banner for items that are not actively trading
         self.flip_banner = tk.StringVar(value="")
@@ -2317,7 +2444,7 @@ class OSRSTrackerApp:
         tree.tag_configure("good", foreground=COLOR_GREEN)
         tree.tag_configure("warn", foreground=COLOR_YELLOW)
         tree.tag_configure("dim", foreground=COLOR_DIM)
-        tree.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        self._pack_table(frame, tree)
         tree.bind("<Double-Button-1>", self._on_fliprec_click)
         self.flip_tree = tree
         self.flip_id_map = {}
@@ -2325,19 +2452,17 @@ class OSRSTrackerApp:
         self.flip_sort = (None, None)
         self._flip_raw = None         # (latest, bulk_1h, fetched_at, bulk_5m)
 
-        ttk.Label(frame,
-                  text=("Buy at the instant-sell price, sell at the "
-                        "instant-buy price (latest trades, like an in-game "
-                        "margin check), minus the 2% GE tax. Last trade = "
-                        "age of the older side (⏱ = over 5 min). Qty is "
-                        "capped by your capital, the "
-                        "4h limit, and ~4h of market volume. Estimates "
-                        "only: offers can take time to fill and margins "
-                        "close quickly. Inactive = a side has not traded in "
-                        "the last hour. Double-click a row to open it in "
-                        "Search."),
-                  style="Dim.TLabel", wraplength=1000, justify="center"
-                  ).pack(side="bottom", before=tree, pady=(0, 10))
+        self._footnote(frame, tree, (
+            "Buy at the instant-sell price, sell at the "
+            "instant-buy price (latest trades, like an in-game "
+            "margin check), minus the 2% GE tax. Last trade = "
+            "age of the older side (⏱ = over 5 min). Qty is "
+            "capped by your capital, the "
+            "4h limit, and ~4h of market volume. Estimates "
+            "only: offers can take time to fill and margins "
+            "close quickly. Inactive = a side has not traded in "
+            "the last hour. Double-click a row to open it in "
+            "Search."))
         return frame
 
     def _flip_membership(self) -> str:
@@ -2380,7 +2505,7 @@ class OSRSTrackerApp:
         if capital is None:
             self.flip_status.set("Capital must look like 5m, 250k or 1,000,000.")
             return
-        settings.save({
+        self._save_settings({
             "capital": self.flip_capital_var.get().strip(),
             "flip_membership": self.flip_members_var.get(),
             "flip_hide_inactive": bool(self.flip_hide_inactive_var.get()),
@@ -2532,18 +2657,18 @@ class OSRSTrackerApp:
         tree.heading("title",  text="Title")
         tree.heading("source", text="Source")
         tree.heading("date",   text="Date")
-        tree.column("title",  width=620, anchor="w")
-        tree.column("source", width=200, anchor="w")
-        tree.column("date",   width=140, anchor="w")
+        # Titles take any spare room, and all three fit the smallest window.
+        tree.column("title",  width=470, anchor="w")
+        tree.column("source", width=200, anchor="w", stretch=False)
+        tree.column("date",   width=140, anchor="w", stretch=False)
 
         tree.bind("<Double-Button-1>", self._on_news_open)
-        tree.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        self._pack_table(frame, tree, bottom=20)
         self.news_tree = tree
         self.news_urls = {}
 
-        ttk.Label(frame,
-                  text="Double-click a row to open the article in your browser.",
-                  style="Dim.TLabel").pack(pady=(0, 10))
+        self._footnote(frame, tree,
+                       "Double-click a row to open the article in your browser.")
 
         return frame
 
@@ -3071,7 +3196,7 @@ class OSRSTrackerApp:
         run_async(lambda: ai.list_models(api_key, url), done)
 
     def _on_ai_provider_changed(self):
-        settings.save({"ai_provider": self.ai_provider_var.get()})
+        self._save_settings({"ai_provider": self.ai_provider_var.get()})
         self._show_ai_models()
         self._update_ai_key_status()
         self._refresh_ai_models()
@@ -3080,7 +3205,7 @@ class OSRSTrackerApp:
         model = self.ai_model_var.get().strip()
         if model:
             provider = self.ai_provider_var.get().lower()
-            settings.save({f"ai_model_{provider}": model})
+            self._save_settings({f"ai_model_{provider}": model})
 
     def _update_ai_key_status(self):
         provider = self.ai_provider_var.get()
@@ -3406,7 +3531,7 @@ class OSRSTrackerApp:
                     return
                 note = warning or f"{ai.service_name(provider, url)} key saved."
                 if custom:
-                    settings.save({"ai_base_url": url})
+                    self._save_settings({"ai_base_url": url})
                 if not ai.save_key(provider, key):
                     note = ("No credential store is available, so the key "
                             "will only be kept until you close the app.")
