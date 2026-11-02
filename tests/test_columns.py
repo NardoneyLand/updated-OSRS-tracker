@@ -9,9 +9,8 @@ settings.SETTINGS_FILE = os.path.join(tempfile.mkdtemp(), "settings.json")
 db.DB_NAME = os.path.join(tempfile.mkdtemp(), "t.db")
 # Saved orders as they might be found: good, damaged by hand, and from an older
 # version that didn't have every column.
-settings.save({"ua_contact": "test-contact", "alert_threshold": 1, "column_order": {
+settings.save({"ua_contact": "test-contact", "alert_threshold": 1, "flip_show": "All verdicts", "column_order": {
     "volatile": ["item", "pct", "buy"],
-    "alerts": ["age", "item", "bogus", "age", 7, ["x"]],
     "watchlist": "nope",
 }})
 import api, gui, scraper
@@ -103,11 +102,10 @@ def scenario():
     try:
         settle(lambda: bool(app.item_data), 10)
         settle(lambda: not app._monitor_busy and bool(app.flip_id_map), 5)
-        flip, watch, alerts, volatile = app.flip_tree, app.watch_tree, app.alerts_tree, app.volatile_tree
+        flip, watch, volatile = app.flip_tree, app.watch_tree, app.volatile_tree
 
         # What was saved is back
         check(order(volatile)[:3] == ["item", "pct", "buy"] and len(order(volatile)) == len(volatile["columns"]), f"a saved order loads, with missing columns added: {order(volatile)[:4]}")
-        check(order(alerts)[:2] == ["item", "age"] and "bogus" not in order(alerts) and len(order(alerts)) == len(alerts["columns"]), f"a damaged order is cleaned up: {order(alerts)[:3]}")
         check(order(watch) == list(watch["columns"]), "something that isn't an order is ignored")
         check(order(flip) == list(flip["columns"]), "no saved order is the default")
 

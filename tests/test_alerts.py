@@ -1,4 +1,4 @@
-"""Alert lifecycle: the database rules, then the real Alerts tab with a controllable market."""
+"""Alert lifecycle: the database rules, then FlipRec's Alerts view with a controllable market."""
 import os, sqlite3, sys, tempfile, time, traceback
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,7 +67,8 @@ check(db.sync_profit_alerts([row()], HOUR, T + HOUR + 1) == (1, 0), "back after 
 a = active()[1]
 check(a["n"] == 2 and a["timestamp"] == T + HOUR + 1, "Times counts the new alert")
 
-db.dismiss_alerts(1)
+# Nothing can dismiss an alert now, but one dismissed before the update still counts.
+conn = db.get_connection(); conn.execute("UPDATE profit_alerts SET dismissed = 1 WHERE item_id = 1"); conn.commit(); conn.close()
 check(active() == {}, "dismissed")
 check(db.sync_profit_alerts([row()], HOUR, T + HOUR + 100) == (0, 0) and active() == {}, "dismissed stays hidden while the flip qualifies, within the hour")
 check(db.sync_profit_alerts([], HOUR, T + HOUR + 160) == (0, 0), "dismissed isn't counted as expired")
@@ -90,8 +91,11 @@ check(second < 0.5, "refreshing many alerts doesn't stall the app")
 conn = db.get_connection(); conn.execute("DELETE FROM profit_alerts"); conn.commit(); conn.close()
 print("db ok")
 
-# ── Real Alerts tab ──
-settings.save({"ua_contact": "gui-test", "capital": "100m"})
+# ── The real app ──
+# flip_verdict is what v1.4 saved: it must not decide what FlipRec opens on, and
+# column_order's "alerts" must be left alone, so going back to v1.4 still works.
+settings.save({"ua_contact": "gui-test", "capital": "100m", "flip_verdict": "All verdicts",
+               "column_order": {"alerts": ["item", "age"]}})
 import api, scraper, gui, analyzer
 now = time.time()
 MAPPING = [{"id": 1, "name": "Abyssal whip", "limit": 70, "members": True}, {"id": 2, "name": "Lobster", "limit": 13000, "members": False},
@@ -138,12 +142,16 @@ def settle(cond=lambda: True, seconds=10):
 
 
 def rows():
-    return [app.alerts_tree.item(i, "values") for i in app.alerts_tree.get_children() if i in app.alert_id_map]
+    return [app.flip_tree.item(i, "values") for i in app.flip_tree.get_children() if i in app.flip_id_map]
+
+
+def times():
+    return {a["item_name"]: a["n"] for a in db.get_active_alerts()}
 
 
 def col(name):
     """Where a column is, so adding one doesn't move what these checks read."""
-    return next(i for i, c in enumerate(gui.OSRSTrackerApp.ALERT_COLUMNS) if c[0] == name)
+    return next(i for i, c in enumerate(gui.OSRSTrackerApp.FLIP_COLUMNS) if c[0] == name)
 
 
 def steady(table):
@@ -160,8 +168,23 @@ def check_now():
 def scenario():
     try:
         settle(lambda: app.item_data)
-        app.notebook.select(app.alerts_tab)
-        settle()
+        tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
+        check(tabs[0].startswith("FlipRec") and not any(t.startswith("Alerts") for t in tabs), f"one tab for flips and alerts: {tabs}")
+        check(app.notebook.select() == str(app.fliprec_tab), "the app opens on it")
+        check(app.flip_show_var.get() == "Alerts", "showing Alerts, whatever v1.4 saved")
+        check(not hasattr(app, "alerts_tree"), "the Alerts table has gone")
+        def texts(widget):
+            found = []
+            for child in widget.winfo_children():
+                if child.winfo_class() in ("TButton", "TLabel"):
+                    found.append(child.cget("text"))
+                found += texts(child)
+            return found
+        words = texts(app.fliprec_tab)
+        check("Alert when est. profit ≥" in words, "the threshold is on FlipRec")
+        check(not any("Dismiss" in str(w) for w in texts(root)), "the Dismiss buttons have gone")
+        columns = list(app.flip_tree["columns"])
+        check("when" not in columns and "hits" not in columns, f"Alerted and Times are off the screen: {columns}")
         check(app.alert_interval_var.get() == "1 min", "default refresh is 1 minute")
         check(list(gui.ALERT_INTERVALS.values()) == [60, 300, 900, 1800], "rates are 1, 5, 15 and 30 minutes")
         filters = app.refresh_btn.master.master.winfo_children()[0]
@@ -173,7 +196,7 @@ def scenario():
         check_now()
         r = rows()
         check(len(r) == 1 and r[0][0] == "Abyssal whip", "flip fires an alert")
-        check("(1)" in app.notebook.tab(app.alerts_tab, "text"), "tab count")
+        check(app.notebook.tab(app.fliprec_tab, "text") == "FlipRec (1)", "tab count")
         check("1 new" in app.market_status.get() and "next check in 1 min" in app.market_status.get(), "status: " + app.market_status.get())
         profit_before = r[0][col("profit")]
 
@@ -182,21 +205,39 @@ def scenario():
         check(len([j for j in root.tk.splitlist(jobs) if j == app._monitor_job]) == 1, "next check is scheduled")
 
         # User selects it; a refresh with new prices keeps the selection
-        tree = app.alerts_tree
+        tree = app.flip_tree
         tree.selection_set(tree.get_children()[0])
         MARKET["latest"]["1"] = trade(2_300_000, 1_900_000)
         check_now()
         r = rows()
         check(r[0][col("profit")] != profit_before, f"price change shows up without a new alert ({profit_before} -> {r[0][col("profit")]})")
-        check("0 new" in app.market_status.get() and r[0][col("hits")] == "1", "refresh isn't a new alert")
-        check(len(tree.selection()) == 1 and app.alert_id_map[tree.selection()[0]] == 1, "selection survives the refresh")
+        check("0 new" in app.market_status.get() and times()["Abyssal whip"] == 1, "refresh isn't a new alert")
+        check(len(tree.selection()) == 1 and app.flip_id_map[tree.selection()[0]] == 1, "selection survives the refresh")
         grab_shot("shot_alerts_live.png")
 
         # Margin closes: alert goes away by itself
         MARKET["latest"]["1"] = trade(1_950_000, 1_940_000)
         check_now()
         check(rows() == [] and "1 expired" in app.market_status.get(), "alert expires when the margin closes: " + app.market_status.get())
-        check(app.notebook.tab(app.alerts_tab, "text") == "Alerts", "tab count clears")
+        check(app.notebook.tab(app.fliprec_tab, "text") == "FlipRec", "tab count clears")
+        check("No flips at or above 1.00M gp" in app.flip_banner.get(), f"and it says why it's empty: {app.flip_banner.get()}")
+
+        # The other views still have everything, and the count doesn't change.
+        # This margin is real, but the flip makes under 1M.
+        MARKET["latest"]["1"] = trade(1_950_000, 1_900_000)
+        check_now()
+        check(rows() == [], "a smaller flip doesn't alert")
+        app.flip_show_var.set("All verdicts")
+        app._apply_flip_filters()
+        settle()
+        check(any(x[0] == "Abyssal whip" for x in rows()), f"All verdicts shows flips that don't alert: {[x[0] for x in rows()]}")
+        check(app.notebook.tab(app.fliprec_tab, "text") == "FlipRec", "without counting them")
+        check(settings.load()["flip_show"] == "All verdicts", "Show is saved")
+        check(settings.load()["flip_verdict"] == "All verdicts", "and v1.4's setting isn't touched")
+        app.flip_show_var.set("Alerts")
+        app._apply_flip_filters()
+        settle()
+        check(rows() == [], "back to Alerts")
 
         # Margin returns: back quietly, no flash
         flashes = []
@@ -204,7 +245,7 @@ def scenario():
         gui.flash_window = lambda r: flashes.append(1)
         MARKET["latest"]["1"] = trade(2_300_000, 1_900_000)
         check_now()
-        check(len(rows()) == 1 and rows()[0][col("hits")] == "1" and not flashes, "returning flip comes back quietly")
+        check(len(rows()) == 1 and times()["Abyssal whip"] == 1 and not flashes, "returning flip comes back quietly")
 
         # Item stops trading: expires
         t = trade(2_300_000, 1_900_000)
@@ -220,17 +261,40 @@ def scenario():
         gui.flash_window = real_flash
 
         # Threshold: raising hides, lowering brings back with no new alert
-        before = {x[0]: x[col("hits")] for x in rows()}
+        before = {x[0] for x in rows()}
+        counts = times()
         app.alert_threshold_var.set("100,000,000")
         app._on_alert_threshold_changed()
         check(rows() == [], "raising the threshold hides alerts")
         app.alert_threshold_var.set("1,000,000")
         app._on_alert_threshold_changed()
-        check({x[0]: x[col("hits")] for x in rows()} == before, "lowering brings them back unchanged")
+        check({x[0] for x in rows()} == before and times() == counts, "lowering brings them back unchanged")
+
+        # The tab count follows the threshold, whatever Show is set to
+        check(app.notebook.tab(app.fliprec_tab, "text") == f"FlipRec ({len(before)})", app.notebook.tab(app.fliprec_tab, "text"))
+        app.flip_show_var.set("Profitable")
+        app._apply_flip_filters()
+        settle()
+        app.alert_threshold_var.set("100,000,000")
+        app._on_alert_threshold_changed()
+        check(app.notebook.tab(app.fliprec_tab, "text") == "FlipRec", "the count follows the threshold in any view")
+        app.alert_threshold_var.set("1,000,000")
+        app._on_alert_threshold_changed()
+        app.flip_show_var.set("Alerts")
+        app._apply_flip_filters()
+        settle()
+
+        # Your sort stays, in either view
+        app._sort_fliprec("name", False)
+        check([x[0] for x in rows()] == sorted(x[0] for x in rows()), "alerts sort like every other row")
+        check_now()
+        check(app.flip_sort == ("name", False), "and stay sorted through a check")
+        app.flip_sort = (None, None)
+        app._update_flip_arrows()
+        check_now()
 
         # Capital change applies straight away
         app.flip_capital_var.set("1m")
-        app._flip_raw = app._market
         app._apply_flip_filters()
         settle()
         check(rows() == [], "alerts follow a lower capital right away")
@@ -269,12 +333,35 @@ def scenario():
         check_now()
         check(len(rows()) == 2, "and return when checks work again")
 
-        # Dismiss
-        tree.selection_set(tree.get_children()[0])
-        app._dismiss_selected_alerts()
-        check(len(rows()) == 1, "dismiss selected")
-        check_now()
-        check(len(rows()) == 1, "dismissed alert doesn't come back on the next check")
+        # Ask AI: how often items alert, for suggesting the Watchlist
+        import aitools
+        tools = aitools.MarketTools(lambda: app.item_data, app._volume)
+        conn = db.get_connection()
+        for hours in (3, 9, 30):
+            conn.execute("INSERT INTO profit_alerts (buy, sell, net, qty, profit, roi, item_id, item_name, timestamp, expired) "
+                         "VALUES (1, 2, 1, 1, 1, 1, 2, 'Lobster', ?, 1)", (int(time.time()) - hours * 3600,))
+        conn.commit(); conn.close()
+        history = tools.run("get_alert_history", {})
+        items = {h["name"]: h for h in history["items"]}
+        check(history["days_kept"] == 7, "it says how far back it goes")
+        check(history["items"][0]["name"] == "Lobster" and items["Lobster"]["times_alerted"] == 3, f"most alerted first: {history['items'][:1]}")
+        check(items["Lobster"]["alerting_now"] is False and items["Lobster"]["last_alerted_hours_ago"] > 2, "past alerts count, and aren't called live")
+        check(items["Abyssal whip"]["alerting_now"] is True, "live ones are marked")
+        check(items["Lobster"]["on_watchlist"] is False, "not on the Watchlist yet")
+        db.watchlist_add(2, "Lobster")
+        check(tools.run("get_alert_history", {})["items"][0]["on_watchlist"] is True, "says when it's on the Watchlist")
+        db.watchlist_remove(2)
+        db.ignore_items([(2, "Lobster")])
+        check(all(h["name"] != "Lobster" for h in tools.run("get_alert_history", {})["items"]), "leaves out ignored items")
+        db.unignore_items([2])
+        check(len(tools.run("get_alert_history", {"limit": 1})["items"]) == 1, "honors its limit")
+        check("error" not in tools.run("get_alert_history", {"limit": "lots"}), "a bad limit isn't an error")
+        tracker = tools.run("get_my_tracker", {})
+        check(all(a["times_alerted"] >= 1 for a in tracker["active_alerts"]), "live alerts include Times")
+        import ai
+        check("get_alert_history" in ai.SYSTEM_PROMPT, "the AI is told what it's for")
+        conn = db.get_connection(); conn.execute("DELETE FROM profit_alerts WHERE item_id = 2"); conn.commit(); conn.close()
+        check(settings.load()["column_order"].get("alerts") == ["item", "age"], "v1.4's saved Alerts column order is left alone")
 
         # Changing the rate: saved, checks now, restarts the timer once
         old_job = app._monitor_job
@@ -309,7 +396,10 @@ def scenario():
         check_now()
         check(wt.selection() and app.watch_id_map[wt.selection()[0]] == selected, "Watchlist selection survives a refresh")
 
-        # Bad saved setting falls back
+        # A bad saved setting falls back
+        helptext = " ".join(body for _title, body in gui.HELP_SECTIONS)
+        for stale in ("Dismiss", "On Alerts", "\"Times\"", "Alerts (3)", "FlipRec · Alerts"):
+            check(stale not in helptext, f"Help no longer says: {stale}")
         check(all("5 minutes" not in body or "last" in body or "5-minute" in body or "after 5" in body for _, body in gui.HELP_SECTIONS), "Help no longer promises a 5-minute check")
     except Exception:
         traceback.print_exc()

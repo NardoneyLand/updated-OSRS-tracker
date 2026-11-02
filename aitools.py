@@ -104,6 +104,21 @@ TOOLS = [
         "schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_alert_history",
+        "description": (
+            "How often items have triggered a profit alert over the last 7 days, "
+            "most first. An item alerts at most once an hour. Shows whether each "
+            "one is alerting now and whether it's on the user's Watchlist. Use it "
+            "to spot items that keep producing good flips."),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer",
+                          "description": "Items to return, 1-50. Default 20."},
+            },
+        },
+    },
+    {
         "name": "get_news",
         "description": "Recent official OSRS news headlines saved by the app.",
         "schema": {
@@ -122,6 +137,7 @@ STATUS_TEXT = {
     "get_item": "Looking up an item…",
     "get_movers": "Checking price moves…",
     "get_my_tracker": "Reading your watchlist and alerts…",
+    "get_alert_history": "Checking your alert history…",
     "get_news": "Reading the news…",
 }
 
@@ -185,6 +201,7 @@ class MarketTools:
             "get_item": self._get_item,
             "get_movers": self._get_movers,
             "get_my_tracker": self._get_my_tracker,
+            "get_alert_history": self._get_alert_history,
             "get_news": self._get_news,
         }.get(name)
         if handler is None:
@@ -392,10 +409,26 @@ class MarketTools:
                 "total_cost": a["cost"],
                 "est_profit": a["profit"], "roi_pct": a["roi"],
                 "alerted_seconds_ago": int(now - a["timestamp"]),
+                "times_alerted": a["n"],
                 "prices_age_seconds": int(now - a["updated"]),
                 "last_trade_age_seconds": (int(now - a["traded_at"])
                                            if a["traded_at"] else None),
             } for a in db.get_active_alerts()],
+        }
+
+    def _get_alert_history(self, args: dict) -> dict:
+        limit = _bounded_int(args, "limit", 20, 1, 50)
+        now = time.time()
+        alerting = {a["item_id"] for a in db.get_active_alerts()}
+        return {
+            "days_kept": db.ALERT_RETENTION // 86400,
+            "items": [{
+                "name": h["item_name"], "times_alerted": h["times"],
+                "first_alerted_hours_ago": round((now - h["first_alerted"]) / 3600, 1),
+                "last_alerted_hours_ago": round((now - h["last_alerted"]) / 3600, 1),
+                "alerting_now": h["item_id"] in alerting,
+                "on_watchlist": bool(h["on_watchlist"]),
+            } for h in db.alert_history(limit)],
         }
 
     def _get_news(self, args: dict) -> dict:

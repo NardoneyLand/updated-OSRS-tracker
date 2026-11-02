@@ -3,6 +3,24 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.5.0 — 2026-11-02
+
+**Changed**
+- Alerts and FlipRec are now one tab, called FlipRec, and it's the tab the app opens
+  on. It starts with Show set to Alerts, which lists the same flips the Alerts tab
+  did. Choose All verdicts or a single verdict to see the rest.
+- The alert threshold moved to FlipRec, and the tab's count is now FlipRec (3). New
+  alerts still flash the taskbar.
+- Alerts sort like the rest of FlipRec, best first until you click a header, rather
+  than newest first.
+- The Dismiss buttons are gone, since prices refresh by themselves. To stop seeing an
+  item, right-click it and choose Ignore item.
+- The Alerted and Times columns are gone from the screen. The app still records them.
+
+**New**
+- Ask AI can see how often each item has alerted over the last 7 days, and may suggest
+  adding items that keep alerting to your Watchlist.
+
 ## 1.4.9 — 2026-11-02
 
 **New**

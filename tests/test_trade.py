@@ -139,14 +139,14 @@ def scenario():
     try:
         settle(lambda: app.item_data)
         settle(lambda: app._market)
-        app.notebook.select(app.alerts_tab)
+        app.notebook.select(app.fliprec_tab)
         app._refresh_market()
         settle()
-        t = table(app.alerts_tree, app.alert_id_map)
+        t = table(app.flip_tree, app.flip_id_map)
         check(set(t) == {"Good item"}, f"alerts drop the fake margin and the item not traded in 5 min: {sorted(t)}")
         check(t["Good item"]["age"] in ("30s","31s","32s","33s"), "Alerts: Last trade column: " + t["Good item"]["age"])
-        headers = [app.alerts_tree.heading(c, "text").replace(" ▼", "") for c in app.alerts_tree["columns"]]
-        check("Last trade" in headers and headers.index("Last trade") == headers.index("Alerted") - 1, f"Alerts headers {headers}")
+        headers = [app.flip_tree.heading(c, "text").replace(" ▼", "") for c in app.flip_tree["columns"]]
+        check("Last trade" in headers and headers.index("Last trade") == headers.index("Vol 1h") + 1, f"FlipRec headers {headers}")
         shot("shot_trade_alerts.png")
 
         # Stored, and available to the AI
@@ -160,38 +160,42 @@ def scenario():
         check(flips["Good item"]["margin_at_5m_avg_prices"] > 0, "AI sees the 5m margin")
 
         # Age keeps counting between checks, without new data
-        conn = db.get_connection(); conn.execute("UPDATE profit_alerts SET traded_at = traded_at - 600"); conn.commit(); conn.close()
-        app._render_alerts()
-        check(table(app.alerts_tree, app.alert_id_map)["Good item"]["age"].startswith("⏱ 10m"), "old trade shows the ⏱ flag")
-        conn = db.get_connection(); conn.execute("UPDATE profit_alerts SET traded_at = traded_at + 600"); conn.commit(); conn.close()
-        app._render_alerts()
-        ages = app._trade_ages[app.alerts_tree]
+        for r in app.flip_results:
+            r["traded_at"] -= 600
+        app._render_fliprec_table()
+        check(table(app.flip_tree, app.flip_id_map)["Good item"]["age"].startswith("⏱ 10m"), "old trade shows the ⏱ flag")
+        for r in app.flip_results:
+            r["traded_at"] += 600
+        app._render_fliprec_table()
+        ages = app._trade_ages[app.flip_tree]
         iid = next(iter(ages))
         ages[iid] -= 300
-        selected_before = app.alerts_tree.selection()
+        selected_before = app.flip_tree.selection()
         app._tick_trade_ages()
-        check(app.alerts_tree.set(iid, "age").startswith("⏱ 5m"), "ticker counts the age up without a redraw")
-        check(app.alerts_tree.selection() == selected_before, "ticker leaves the selection alone")
+        check(app.flip_tree.set(iid, "age").startswith("⏱ 5m"), "ticker counts the age up without a redraw")
+        check(app.flip_tree.selection() == selected_before, "ticker leaves the selection alone")
 
         # Sort by last trade: newest first on first click
-        app._sort_alerts("traded_at", True)
-        check("▼" in app.alerts_tree.heading("age", "text"), "Last trade column sorts")
-        app._sort_alerts("timestamp", True)
+        app._sort_fliprec("age", False)
+        check("▲" in app.flip_tree.heading("age", "text"), "Last trade column sorts")
+        app.flip_sort = (None, None)
+        app._update_flip_arrows()
 
         # Failed margin check goes away if the margin firms up, and vice versa
         STATE["m5"] = {}
         app._volume._fallbacks.clear()
         app._refresh_market()
         settle()
-        check(set(table(app.alerts_tree, app.alert_id_map)) == {"Good item", "Voidwaker"}, "no 5m data: margin isn't marked down")
+        check(set(table(app.flip_tree, app.flip_id_map)) == {"Good item", "Voidwaker"}, "no 5m data: margin isn't marked down")
         STATE["m5"] = M5
         app._volume._fallbacks.clear()
         app._refresh_market()
         settle()
-        t = table(app.alerts_tree, app.alert_id_map)
+        t = table(app.flip_tree, app.flip_id_map)
         check(set(t) == {"Good item"} and "1 expired" in app.market_status.get(), "margin losing 5m support expires its alert: " + app.market_status.get())
 
         # FlipRec shows why
+        app.flip_show_var.set("All verdicts")
         app._refresh_market()
         settle(lambda: app.refresh_btn.instate(["!disabled"]))
         app._apply_flip_filters()

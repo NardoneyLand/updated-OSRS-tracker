@@ -9,7 +9,7 @@ from tkinter import ttk
 import settings, db
 settings.SETTINGS_FILE = os.path.join(tempfile.mkdtemp(), "settings.json")
 db.DB_NAME = os.path.join(tempfile.mkdtemp(), "t.db")
-settings.save({"ua_contact": "test-contact", "capital": "1b", "alert_threshold": 1})
+settings.save({"ua_contact": "test-contact", "capital": "1b", "alert_threshold": 1, "flip_show": "All verdicts"})
 import aitools, analyzer, api, gui, scraper
 
 HEADER_PADDING, CELL_PADDING = 13, 8    # what the theme's cells use up, in pixels
@@ -129,20 +129,18 @@ def scenario():
         app._render_fliprec_table()
 
         # Alerts
-        app.notebook.select(app.alerts_tab)
+        app.flip_show_var.set("Alerts")
+        app._apply_flip_filters()
         settle()
-        tree = app.alerts_tree
-        columns = list(tree["columns"])
-        check(columns.index("cost") == columns.index("roi") + 1, "Alerts: it sits right after ROI")
-        fits(tree, "Alerts")
         alerts = db.get_active_alerts()
         check(alerts and all(a["cost"] == a["buy"] * a["qty"] for a in alerts), "Alerts: Buy x Qty")
-        shown = table(tree, app.alert_id_map)
+        shown = table(tree, app.flip_id_map)
         check(shown and shown[0]["cost"] != "" and "," in shown[0]["cost"], f"Alerts: shown in the chosen format: {shown[0]['cost'] if shown else ''}")
-        app._sort_alerts("cost", True)
+        app.flip_sort = (None, None)
+        app._sort_fliprec("cost", True)
         settle()
         order = [a["cost"] for a in sorted(db.get_active_alerts(), key=lambda a: a["cost"], reverse=True)]
-        check([row["cost"] for row in table(tree, app.alert_id_map)] == [f"{c:,}" for c in order], "Alerts: the header sorts it")
+        check([row["cost"] for row in table(tree, app.flip_id_map)] == [f"{c:,}" for c in order], "Alerts: the header sorts it")
 
         # Ask AI and Help
         tools = aitools.MarketTools(lambda: app.item_data, app._volume)

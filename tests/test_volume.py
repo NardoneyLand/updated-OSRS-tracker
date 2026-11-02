@@ -247,7 +247,7 @@ def gated_bucket(step, start):
 
 
 conn = db.get_connection(); conn.execute("DELETE FROM volume_buckets"); conn.commit(); conn.close()
-settings.save({"ua_contact": "gui-test", "capital": "1b", "alert_threshold": 100_000})
+settings.save({"ua_contact": "gui-test", "capital": "1b", "alert_threshold": 100_000, "flip_show": "All verdicts"})
 api.get_mapping = lambda: MAPPING
 api.get_all_latest_prices = lambda: LATEST
 api.get_latest_price = lambda i: LATEST[str(i)]
@@ -354,14 +354,15 @@ def scenario():
         check(names[0] == "Lobster", f"sorting by volume is numeric: {names}")
 
         # Alerts
-        app.notebook.select(app.alerts_tab)
+        app.flip_show_var.set("Alerts")
         app._refresh_market()
         settle()
-        a = table(app.alerts_tree, app.alert_id_map)
+        a = table(app.flip_tree, app.flip_id_map)
         check(a["Abyssal whip"]["volume"] == "360 ▲", "Alerts Vol 1h: " + a["Abyssal whip"]["volume"])
         check(db.get_active_alerts()[0]["volume"] is not None, "volume stored with the alert")
-        headers = [app.alerts_tree.heading(c, "text").replace(" ▼", "") for c in app.alerts_tree["columns"]]
+        headers = [app.flip_tree.heading(c, "text").replace(" ▼", "").replace(" ▲", "") for c in app.flip_tree["columns"]]
         check(headers.index("Vol 1h") == headers.index("Last trade") - 1, "Alerts column placement")
+        app.flip_show_var.set("All verdicts")
         shot("shot_vol_alerts.png")
 
         # Watchlist

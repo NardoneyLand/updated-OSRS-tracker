@@ -8,7 +8,7 @@ from tkinter import ttk
 import settings, db
 settings.SETTINGS_FILE = os.path.join(tempfile.mkdtemp(), "settings.json")
 db.DB_NAME = os.path.join(tempfile.mkdtemp(), "t.db")
-settings.save({"ua_contact": "test-contact", "alert_threshold": 1})
+settings.save({"ua_contact": "test-contact", "alert_threshold": 1, "flip_show": "All verdicts"})
 import threading
 import analyzer, api, gui, scraper
 
@@ -91,10 +91,6 @@ def flips():
     return rows(app.flip_tree, app.flip_id_map)
 
 
-def alerts():
-    return rows(app.alerts_tree, app.alert_id_map)
-
-
 def watched():
     return rows(app.watch_tree, app.watch_id_map)
 
@@ -153,15 +149,14 @@ def scenario():
         # Every table starts the same
         shared = ["item", "buy", "sell", "qty", "roi", "cost", "profit", "volume", "age"]
         headers = None
-        for tree, name in ((app.flip_tree, "FlipRec"), (app.alerts_tree, "Alerts"), (app.watch_tree, "Watchlist"), (app.volatile_tree, "Volatile")):
+        for tree, name in ((app.flip_tree, "FlipRec"), (app.watch_tree, "Watchlist"), (app.volatile_tree, "Volatile")):
             columns = list(tree["columns"])
             check(columns[:9] == shared, f"{name} starts with the shared columns: {columns[:9]}")
             names = [tree.heading(c, "text").rstrip(" ▲▼") for c in shared]
             headers = headers or names
             check(names == headers, f"{name} uses the same headers: {names}")
-        check("net" not in app.alerts_tree["columns"] and "net" not in app.watch_tree["columns"], "Net / item is only on FlipRec")
+        check("net" not in app.watch_tree["columns"], "Net / item is only on FlipRec")
         check({"net", "tax", "limit", "verdict", "signal"} <= set(app.flip_tree["columns"]), "FlipRec keeps its own columns")
-        check({"when", "hits"} <= set(app.alerts_tree["columns"]), "Alerts keeps Alerted and Times")
         check({"target_below", "target_above", "vol_12h", "vol_24h", "verdict", "added"} <= set(app.watch_tree["columns"]), "Watchlist keeps its own columns")
         check({"pct", "avg", "window_volume"} <= set(app.volatile_tree["columns"]), "Volatile has its own columns")
         check("current" not in app.volatile_tree["columns"], "Buy and Sell replace Current")
@@ -175,7 +170,7 @@ def scenario():
         refresh()
         check(STATE["fetches"] == before + 1, f"one price request per refresh: {STATE['fetches'] - before}")
         settle(lambda: bool(movers()), 3)
-        tables = {"FlipRec": flips()[1], "Alerts": alerts()[1], "Watchlist": watched()[1], "Volatile": movers()[1]}
+        tables = {"FlipRec": flips()[1], "Watchlist": watched()[1], "Volatile": movers()[1]}
         for name, row in tables.items():
             for column in ("buy", "sell"):
                 check(row[column] == tables["FlipRec"][column], f"{name} {column} matches FlipRec: {row[column]}")
@@ -226,7 +221,7 @@ def scenario():
         check(app.volatile_sort == ("name", True) and order(app.volatile_tree)[0] == "Lobster", "Volatile keeps its sort through a refresh")
         check("▼" in app.volatile_tree.heading("item", "text"), "and its arrow")
         check([app.volatile_id_map[i] for i in app.volatile_tree.selection()] == [2], "and your selected row")
-        app.flip_verdict_var.set("All verdicts")
+        app.flip_show_var.set("All verdicts")
         app._apply_flip_filters()
         check(app.flip_sort == ("name", False), "changing a setting keeps the sort too")
         app.flip_capital_var.set("")

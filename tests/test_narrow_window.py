@@ -104,7 +104,6 @@ def scenario():
         settle(lambda: app.flip_results, 8)
 
         tabs = (("FlipRec", app.fliprec_tab, app.flip_tree),
-                ("Alerts", app.alerts_tab, app.alerts_tree),
                 ("Watchlist", app.watchlist_tab, app.watch_tree),
                 ("Volatile", app.volatile_tab, app.volatile_tree))
         wide_values = {}
@@ -163,15 +162,13 @@ def scenario():
         app.market_status.set("Prices fetched at 12:00:00")
         resize("900x560")
 
-        app.notebook.select(app.alerts_tab)
-        settle()
         alert_actions = app.refresh_btn.master
-        check(alert_actions.grid_info()["row"] == 1, "Alerts at 900: the buttons move to their own row")
+        check(alert_actions.grid_info()["row"] == 1, "at 900: the buttons move to their own row")
         for button in buttons(alert_actions):
             text = button.cget("text")
-            check(button.winfo_width() >= button.winfo_reqwidth(), f"Alerts at 900: {text} is whole")
+            check(button.winfo_width() >= button.winfo_reqwidth(), f"at 900: {text} is whole")
             check(right_edge(button, alert_actions.master) <= alert_actions.master.winfo_width(),
-                  f"Alerts at 900: {text} is on screen")
+                  f"at 900: {text} is on screen")
 
         # News fits with no scrollbar, and titles get any extra room
         app.notebook.select(app.news_tab)
@@ -187,15 +184,15 @@ def scenario():
         resize("900x560")
 
         # A refresh doesn't undo where you've scrolled to
-        app.notebook.select(app.alerts_tab)
+        app.notebook.select(app.fliprec_tab)
         settle()
-        app.alerts_tree.xview_moveto(1)
+        app.flip_tree.xview_moveto(1)
         settle()
-        first = app.alerts_tree.xview()[0]
-        app._render_alerts()
+        first = app.flip_tree.xview()[0]
+        app._render_fliprec_table()
         settle()
-        check(app.alerts_tree.xview()[0] == first, "a redraw keeps the sideways scroll")
-        app.alerts_tree.xview_moveto(0)
+        check(app.flip_tree.xview()[0] == first, "a redraw keeps the sideways scroll")
+        app.flip_tree.xview_moveto(0)
 
         # And back to full size, with everything undone
         resize("1380x860")

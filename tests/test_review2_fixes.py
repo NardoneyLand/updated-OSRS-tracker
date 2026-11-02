@@ -214,7 +214,7 @@ def settle(cond=lambda: True, seconds=10):
 
 
 def rows():
-    return {app.alerts_tree.set(i, "item") for i in app.alerts_tree.get_children() if i in app.alert_id_map}
+    return {app.flip_tree.set(i, "item") for i in app.flip_tree.get_children() if i in app.flip_id_map}
 
 
 def scenario():
@@ -254,7 +254,7 @@ def scenario():
         check("Abyssal whip" in rows(), "#3 alert is live")
         latest_, bulk_, _, m5_ = app._market
         conn = db.get_connection(); conn.execute("UPDATE profit_alerts SET expired = 1"); conn.commit(); conn.close()
-        app._render_alerts()
+        app._render_fliprec_table()
         check(rows() == set(), "#3 alerts expired during an outage")
         old = time.time() - 1800
         stale_latest = {k: dict(v, highTime=old - 20 if v["highTime"] else None, lowTime=old - 30) for k, v in latest_.items()}

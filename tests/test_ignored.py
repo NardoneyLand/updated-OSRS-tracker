@@ -9,7 +9,7 @@ from tkinter import ttk
 import settings, db
 settings.SETTINGS_FILE = os.path.join(tempfile.mkdtemp(), "settings.json")
 db.DB_NAME = os.path.join(tempfile.mkdtemp(), "t.db")
-settings.save({"ua_contact": "test-contact", "alert_threshold": 1})
+settings.save({"ua_contact": "test-contact", "alert_threshold": 1, "flip_show": "All verdicts"})
 import ai, aitools, api, gui, scraper
 
 failures = []
@@ -92,7 +92,7 @@ def flip_names():
 
 
 def alert_names():
-    return names(app.alerts_tree, app.alert_id_map)
+    return [a["item_name"] for a in db.get_active_alerts()]
 
 
 def volatile_names():
@@ -150,7 +150,7 @@ def scenario():
     try:
         settle(lambda: bool(app.item_data), 10)
         tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
-        check(tabs[3] == "Ignored List", f"the tab sits after Watchlist: {tabs}")
+        check(tabs[2] == "Ignored List", f"the tab sits after Watchlist: {tabs}")
 
         # FlipRec: an ignored item is gone, and stays gone after a refresh
         app.notebook.select(app.fliprec_tab)
@@ -220,13 +220,18 @@ def scenario():
         # Alerts: never for an ignored item, and one already live disappears
         tick()
         check(len(alert_names()) == COUNT - 2 and "Item 120" not in alert_names(), "ignored items don't alert")
-        check(app.notebook.tab(app.alerts_tab, "text") == f"Alerts ({COUNT - 2})", "the tab count leaves them out")
-        tree, id_map = app.alerts_tree, app.alert_id_map
-        app.notebook.select(app.alerts_tab)
+        check(app.notebook.tab(app.fliprec_tab, "text") == f"FlipRec ({COUNT - 2})", "the tab count leaves them out")
+        tree, id_map = app.flip_tree, app.flip_id_map
+        app.flip_show_var.set("Alerts")
+        app._apply_flip_filters()
         root.update()
+        check(len(flip_names()) == COUNT - 2 and "Item 120" not in flip_names(), "the Alerts view leaves them out")
         menu = right_click(tree, iid_of(tree, id_map, 50))
         choose(menu, "Ignore item")
-        check("Item 050" not in alert_names(), "a live alert disappears straight away")
+        check("Item 050" not in alert_names() and "Item 050" not in flip_names(), "a live alert disappears straight away")
+        app.flip_show_var.set("All verdicts")
+        app._apply_flip_filters()
+        root.update()
         check(not [a for a in db.get_active_alerts() if a["item_id"] == 50], "so does what Ask AI reads")
         tick()
         check("Item 050" not in alert_names(), "and it doesn't come back on the next check")
@@ -389,7 +394,7 @@ def scenario():
         tab_font = tkfont.Font(root=root, font=tab_style.lookup("TNotebook.Tab", "font"))
         pad = tab_style.lookup("TNotebook.Tab", "padding")
         pad = int(str(pad).split()[0]) if not isinstance(pad, (tuple, list)) else int(str(pad[0]))
-        worst = ["FlipRec", "Alerts (999)", "Watchlist (99)", "Ignored List", "Volatile", "Search", "Ask AI", "News", "Help"]
+        worst = ["FlipRec (999)", "Watchlist (99)", "Ignored List", "Volatile", "Search", "Ask AI", "News", "Help"]
         needed = sum(tab_font.measure(label) + 2 * pad + 2 for label in worst) + 4
         check(needed <= app.notebook.winfo_width(), f"tab labels aren't clipped at the smallest window: {needed} of {app.notebook.winfo_width()}")
         last = 0

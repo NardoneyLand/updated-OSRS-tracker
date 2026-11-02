@@ -306,16 +306,23 @@ def get_active_alerts() -> List[dict]:
     return [dict(r) for r in rows]
 
 
-def dismiss_alerts(item_id: Optional[int] = None):
-    """Dismiss one item's alerts, or all alerts if item_id is None."""
+def alert_history(limit: int = 20) -> List[dict]:
+    """How often items have alerted, most first, from the alerts still kept (see
+    ALERT_RETENTION). Ignored items are left out."""
     conn = get_connection()
-    if item_id is None:
-        conn.execute("UPDATE profit_alerts SET dismissed = 1")
-    else:
-        conn.execute("UPDATE profit_alerts SET dismissed = 1 WHERE item_id = ?",
-                     (item_id,))
-    conn.commit()
+    rows = conn.execute(
+        "SELECT a.item_id, MAX(a.item_name) AS item_name, COUNT(*) AS times, "
+        "       MIN(a.timestamp) AS first_alerted, "
+        "       MAX(a.timestamp) AS last_alerted, "
+        "       w.item_id IS NOT NULL AS on_watchlist "
+        "FROM profit_alerts a "
+        "LEFT JOIN watchlist w ON w.item_id = a.item_id "
+        "WHERE a.item_id NOT IN (SELECT item_id FROM ignored_items) "
+        "GROUP BY a.item_id "
+        "ORDER BY times DESC, last_alerted DESC LIMIT ?", (limit,)
+    ).fetchall()
     conn.close()
+    return [dict(r) for r in rows]
 
 
 def purge_old_alerts(max_age: int = ALERT_RETENTION):
