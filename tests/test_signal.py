@@ -82,7 +82,7 @@ check(gui.fmt_price_move({"direction": "falling", "pct_change": -5.2, "hours": 3
 check(gui.fmt_price_move({"direction": "rising", "pct_change": 3.4, "hours": 30}) == "Up 3.4% over 30 hours", "price move: up")
 check(gui.fmt_price_move({"direction": "stable", "pct_change": 0.4, "hours": 30}) == "Steady (+0.4%) over 30 hours", "price move: steady")
 check(gui.fmt_price_move({"direction": "unknown", "pct_change": 0, "hours": 0}) == "Not enough history", "price move: unknown")
-check("High for this item" in gui.fmt_volume_pace({"volume": "high", "recent_volume": 4800, "usual_volume": 2100}), "volume text")
+check(gui.fmt_volume_pace({"volume": "high", "recent_volume": 4800, "usual_volume": 2100}).startswith("High  (4.8K both sides last hour"), "volume text")
 check(gui.fmt_volume_pace({"volume": "unknown", "recent_volume": 0, "usual_volume": 0}) == "Unknown", "volume unknown")
 
 # Nothing still gives the old advice

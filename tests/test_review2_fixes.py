@@ -225,31 +225,31 @@ def scenario():
         db.watchlist_add(2, "One price")
         db.watchlist_add(1, "Abyssal whip")
         errors.clear()
-        app._monitor_tick()
+        app._refresh_market()
         settle()
         check(errors == [], f"#1 no error from a one-sided price: {errors}")
         shown = {app.watch_tree.set(i, "item"): app.watch_tree.set(i, "buy") for i in app.watch_tree.get_children() if i in app.watch_id_map}
         check(shown.get("One price") == "N/A" and shown.get("Abyssal whip") not in (None, "N/A"), f"#1 Watchlist still shows everything: {shown}")
-        check(app.alerts_status.get().startswith("Prices updated"), "#1 Alerts status finishes: " + app.alerts_status.get()[:40])
+        check(app.market_status.get().startswith("Prices updated"), "#1 Alerts status finishes: " + app.market_status.get()[:40])
 
         # #4 FlipRec keeps its last good data
-        app._refresh_fliprec()
-        settle(lambda: app.flip_refresh_btn.instate(["!disabled"]))
+        app._refresh_market()
+        settle(lambda: app.refresh_btn.instate(["!disabled"]))
         settle()
-        good = app._flip_raw
+        good = app._market
         check(good and good[1], "#4 starts with volumes")
         STATE["bulk"] = {}
         app._volume._fallbacks.clear()
-        app._refresh_fliprec()
-        settle(lambda: app.flip_refresh_btn.instate(["!disabled"]))
+        app._refresh_market()
+        settle(lambda: app.refresh_btn.instate(["!disabled"]))
         settle()
-        check(app._flip_raw is good and app._market[1], "#4 missing volumes don't replace good data")
-        check(app.flip_status.get() == "Could not fetch prices.", "#4 and it says the fetch failed: " + app.flip_status.get())
+        check(app._market is good and app._market[1], "#4 missing volumes don't replace good data")
+        check("Check failed" in app.market_status.get(), "#4 and it says the fetch failed: " + app.market_status.get())
         STATE["bulk"] = BULK
         app._volume._fallbacks.clear()
 
         # #3 Old snapshot doesn't bring alerts back or look fresh
-        app._monitor_tick()
+        app._refresh_market()
         settle()
         check("Abyssal whip" in rows(), "#3 alert is live")
         latest_, bulk_, _, m5_ = app._market

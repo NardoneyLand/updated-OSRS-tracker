@@ -330,18 +330,19 @@ def scenario():
         check([t[(0, c)] for c in (1, 2, 3)] == ["1h", "12h", "24h"], "Search headings")
         check(t[(1, 1)] == "480" and t[(2, 1)] == "360", "Search 1h buys and sells")
         check(t[(1, 2)] != "-" and t[(1, 3)] != "-", "Search fills in 12h and 24h without another search")
-        labels = [w.cget("text") for w in app.result_frame.winfo_children()[1].winfo_children()[0].winfo_children() if isinstance(w, tk.Label) or w.winfo_class() == "TLabel"]
-        check("Volume" in labels and "Signal" not in labels and "Price move" in labels, f"Search rows: {labels}")
+        labels = list(app._search_stats)
+        check("Trading" in labels and "Vol 1h" in labels and "Signal" not in labels and "Price move" in labels, f"Search rows: {labels}")
         shot("shot_vol_search.png")
 
         # FlipRec
-        app._refresh_fliprec()
-        settle(lambda: app.flip_refresh_btn.instate(["!disabled"]))
+        app._refresh_market()
+        settle(lambda: app.refresh_btn.instate(["!disabled"]))
         settle()
         app.notebook.select(app.fliprec_tab)
         f = table(app.flip_tree, app.flip_id_map)
         print("fliprec volumes:", {k: v["volume"] for k, v in f.items()})
         check(f["Abyssal whip"]["volume"] == "360 ▲", "FlipRec arrow up (360 vs usual ~50/hr): " + f["Abyssal whip"]["volume"])
+        check(app._search_stats["Vol 1h"].cget("text") == "360 ▲", "an open Search result shows the same Vol 1h: " + app._search_stats["Vol 1h"].cget("text"))
         check(f["Lobster"]["volume"].endswith("▼"), "FlipRec arrow down (9.6K vs usual ~80K/hr): " + f["Lobster"]["volume"])
         check("▲" not in f.get("Quiet thing", {"volume": ""})["volume"] and "▼" not in f.get("Quiet thing", {"volume": ""})["volume"], "item at its usual pace has no arrow")
         check(app.flip_tree.heading("volume", "text") == "Vol 1h", "FlipRec header says Vol 1h")
@@ -354,7 +355,7 @@ def scenario():
 
         # Alerts
         app.notebook.select(app.alerts_tab)
-        app._monitor_tick()
+        app._refresh_market()
         settle()
         a = table(app.alerts_tree, app.alert_id_map)
         check(a["Abyssal whip"]["volume"] == "360 ▲", "Alerts Vol 1h: " + a["Abyssal whip"]["volume"])
@@ -375,7 +376,7 @@ def scenario():
 
         # Monitor no longer calls the Wiki's bulk endpoints once history is ready
         fallback_calls.clear()
-        app._monitor_tick()
+        app._refresh_market()
         settle()
         check(fallback_calls == [], f"checks use the history, not extra bulk requests: {fallback_calls}")
 
@@ -390,7 +391,7 @@ def scenario():
         fallback_calls.clear()
         app.volatile_window_var.set("24h")
         app._refresh_volatile()
-        settle(lambda: app.volatile_refresh_btn.instate(["!disabled"]))
+        settle(lambda: app.refresh_btn.instate(["!disabled"]))
         check(fallback_calls == [], f"Volatile uses rolling data: {fallback_calls}")
     except Exception:
         traceback.print_exc()

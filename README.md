@@ -11,12 +11,14 @@ Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Ignored List** · **Volati
 
 ## Features
 
-- **FlipRec** — every item you can buy and resell at a profit after the 2% GE tax, priced like an in-game margin check. Capital-aware quantity and profit estimates, the gp you need up front, buy limits, volume, last-trade age, Profitable / Marginal / Suspect / Inactive verdicts, and a note on how far the price is from its 1-hour average.
-- **Profit alerts** — checks the market every 1, 5, 15 or 30 minutes (1 by default) and alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and, on Windows, a taskbar flash. Alerts keep updating with live prices and disappear once the flip stops qualifying.
+- **One bar for every tab** — set your Capital, Items filter, price format and refresh rate above the tabs. One refresh updates every tab at once, so an item shows the same prices everywhere.
+- **The same columns on every table** — Item, Buy, Sell, Qty, ROI, Upfront, Est. profit, Vol 1h and Last trade, in that order, with each tab's own columns to the right.
+- **FlipRec** — every item you can buy and resell at a profit after the 2% GE tax, priced like an in-game margin check. Adds the margin, tax, buy limit, Profitable / Marginal / Suspect / Inactive verdicts, and a note on how far the price is from its 1-hour average.
+- **Profit alerts** — alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and, on Windows, a taskbar flash. Alerts keep updating with live prices and disappear once the flip stops qualifying.
 - **Watchlist** — add items by right-clicking them in a table or from Search, follow their live margins, and set target prices to be alerted when an item's Buy price falls to one or its Sell price rises to one.
 - **Ignored List** — right-click an item you don't want to see to hide it from FlipRec, Alerts and Volatile, and stop Ask AI suggesting it. It's listed on its own tab, where you can bring it back. Search still finds it, and if it's on your Watchlist it stays there with an Ignored tag.
-- **Volatile scanner** — the biggest movers across the whole GE over 5m / 1h / 6h / 24h.
-- **Item search + price chart** — autocomplete lookup with the item's recent price move, volume and momentum, plus the item's price chart (1H to 1 year, backed by the OSRS Wiki's history) on the same page.
+- **Volatile scanner** — the biggest movers across the GE over 5m / 1h / 6h / 24h, alongside the same flip numbers as the other tables.
+- **Item search + price chart** — autocomplete lookup with the same flip numbers as the tables, updated as prices refresh, plus the item's recent price move, volume and momentum, and its price chart (1H to 1 year, backed by the OSRS Wiki's history) on the same page.
 - **Ask AI** — ask an AI for suggestions using your own API key from Anthropic, OpenAI, OpenRouter, or any service with an OpenAI-compatible API. The AI can look up live flips, big movers, item history, your Watchlist, your alerts and the news, but it can't change anything or place trades. Save your own instructions to get answers in the same format every time.
 - **Live news** — the official OSRS news feed, loaded on launch.
 - **In-app Help tab** — explains every tab, the verdicts and the GE tax.

@@ -102,7 +102,7 @@ def settle(cond, seconds=8):
 
 def check_market():
     """One real market check, as the timer runs it."""
-    app._monitor_tick()
+    app._refresh_market()
     settle(lambda: not app._monitor_busy)
 
 
@@ -178,9 +178,6 @@ def scenario():
         check(tab() == "Watchlist", "no count with no targets")
         root.geometry("1380x860")
         settle(lambda: False, 0.3)
-        tree = app.watch_tree
-        total = sum(tree.column(c, "width") for c in tree["columns"])
-        check(total <= tree.winfo_width(), f"every column fits at the default width: {total} vs {tree.winfo_width()}")
         check(rows()["Abyssal whip"]["target_below"] == "" and rows()["Abyssal whip"]["target_above"] == "", "target cells start blank")
 
         # The button needs a row, and the empty message isn't one

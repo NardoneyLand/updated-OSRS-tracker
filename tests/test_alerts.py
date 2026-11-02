@@ -153,7 +153,7 @@ def steady(table):
 
 
 def check_now():
-    app._monitor_tick()
+    app._refresh_market()
     settle()
 
 
@@ -164,7 +164,7 @@ def scenario():
         settle()
         check(app.alert_interval_var.get() == "1 min", "default refresh is 1 minute")
         check(list(gui.ALERT_INTERVALS.values()) == [60, 300, 900, 1800], "rates are 1, 5, 15 and 30 minutes")
-        filters = app.alerts_check_btn.master.master.winfo_children()[0]
+        filters = app.refresh_btn.master.master.winfo_children()[0]
         combo = next(w for w in filters.winfo_children() if isinstance(w, ttk.Combobox) and w.cget("textvariable") == str(app.alert_interval_var))
         check(tuple(combo.cget("values")) == ("1 min", "5 min", "15 min", "30 min") and str(combo.cget("state")) == "readonly", "dropdown choices")
 
@@ -174,7 +174,7 @@ def scenario():
         r = rows()
         check(len(r) == 1 and r[0][0] == "Abyssal whip", "flip fires an alert")
         check("(1)" in app.notebook.tab(app.alerts_tab, "text"), "tab count")
-        check("1 new" in app.alerts_status.get() and "next check in 1 min" in app.alerts_status.get(), "status: " + app.alerts_status.get())
+        check("1 new" in app.market_status.get() and "next check in 1 min" in app.market_status.get(), "status: " + app.market_status.get())
         profit_before = r[0][col("profit")]
 
         # Timer scheduled once at the chosen rate
@@ -188,14 +188,14 @@ def scenario():
         check_now()
         r = rows()
         check(r[0][col("profit")] != profit_before, f"price change shows up without a new alert ({profit_before} -> {r[0][col("profit")]})")
-        check("0 new" in app.alerts_status.get() and r[0][col("hits")] == "1", "refresh isn't a new alert")
+        check("0 new" in app.market_status.get() and r[0][col("hits")] == "1", "refresh isn't a new alert")
         check(len(tree.selection()) == 1 and app.alert_id_map[tree.selection()[0]] == 1, "selection survives the refresh")
         grab_shot("shot_alerts_live.png")
 
         # Margin closes: alert goes away by itself
         MARKET["latest"]["1"] = trade(1_950_000, 1_940_000)
         check_now()
-        check(rows() == [] and "1 expired" in app.alerts_status.get(), "alert expires when the margin closes: " + app.alerts_status.get())
+        check(rows() == [] and "1 expired" in app.market_status.get(), "alert expires when the margin closes: " + app.market_status.get())
         check(app.notebook.tab(app.alerts_tab, "text") == "Alerts", "tab count clears")
 
         # Margin returns: back quietly, no flash
@@ -244,14 +244,14 @@ def scenario():
         keep_latest = MARKET["latest"]
         MARKET["latest"] = {}
         check_now()
-        check(steady(rows()) == steady(good) and "Check failed" in app.alerts_status.get() and "Alerts show prices from" in app.alerts_status.get(), "failed check keeps alerts and says so: " + app.alerts_status.get())
+        check(steady(rows()) == steady(good) and "Check failed" in app.market_status.get() and "Prices shown are from" in app.market_status.get(), "failed check keeps alerts and says so: " + app.market_status.get())
         # ...and neither must volumes failing with nothing to fall back on
         MARKET["latest"] = keep_latest
         keep_bulk = MARKET["bulk"]
         MARKET["bulk"] = {}
         app._volume._fallbacks.clear()
         check_now()
-        check(steady(rows()) == steady(good) and "Check failed" in app.alerts_status.get(), "no volumes: alerts aren't all expired")
+        check(steady(rows()) == steady(good) and "Check failed" in app.market_status.get(), "no volumes: alerts aren't all expired")
         # A FlipRec refresh that got no volumes can't expire them either
         app._market = (keep_latest, {}, time.time(), {})
         check(app._evaluate_alerts() == (0, 0) and steady(rows()) == steady(good), "snapshot with no volumes is ignored")
@@ -285,7 +285,7 @@ def scenario():
         app._on_alert_interval_changed()
         settle()
         check(calls == [1], "changing the rate checks right away")
-        check(settings.load()["alert_interval"] == "15 min" and "next check in 15 min" in app.alerts_status.get(), "rate saved and shown")
+        check(settings.load()["alert_interval"] == "15 min" and "next check in 15 min" in app.market_status.get(), "rate saved and shown")
         check(app._monitor_job != old_job and str(old_job) not in root.tk.splitlist(root.tk.call("after", "info")), "old timer cancelled")
         check(str(app._monitor_job) in root.tk.splitlist(root.tk.call("after", "info")), "new timer running")
         check(app._alert_stale_after() == 1800, "stale limit follows the rate")
@@ -295,7 +295,7 @@ def scenario():
         # Real timer really fires, at the set rate
         gui.ALERT_INTERVALS["1 min"] = 1
         calls.clear()
-        app._monitor_tick()
+        app._refresh_market()
         check(settle(lambda: len(calls) >= 3, 6), f"timer keeps firing by itself ({len(calls)} checks)")
         gui.ALERT_INTERVALS["1 min"] = 60
 

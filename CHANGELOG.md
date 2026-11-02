@@ -3,6 +3,31 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.8 — 2026-11-02
+
+**New**
+- One bar above the tabs holds Capital, Items, Prices, Refresh and a Refresh now
+  button, so you can change them from any tab.
+- One refresh now updates FlipRec, Alerts, Watchlist, Volatile and an open Search
+  result together, so an item shows the same prices everywhere. FlipRec and Volatile
+  used to update only when you clicked Refresh. On Search, everything but the chart
+  updates, including Price move, Trading, Momentum and Worth knowing.
+- FlipRec, Alerts, Watchlist and Volatile all start with the same columns, in the
+  same order: Item, Buy, Sell, Qty, ROI, Upfront, Est. profit, Vol 1h and Last trade.
+  This adds Qty, Upfront and Est. profit to the Watchlist.
+- Search results have an Ignore item button.
+
+**Changed**
+- Search shows the same values and names as the tables. "High buy" and "Low sell"
+  are now Sell and Buy, the names the rest of the app uses for those prices.
+- Volatile follows your Items and Prices settings. Its Current column is replaced by
+  Buy and Sell, and Volume is now Window volume, since Vol 1h means the slower side.
+- Your column sort on FlipRec and Volatile now stays when prices update or you change
+  a setting.
+- Net / item now appears only on FlipRec.
+- The smallest window is a little taller, at 680 pixels, so the Search panel and chart
+  still fit with the new bar.
+
 ## 1.4.7 — 2026-11-02
 
 **New**

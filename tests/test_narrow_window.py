@@ -98,7 +98,7 @@ def scenario():
     try:
         settle(lambda: app.item_data, 8)
         db.watchlist_add(1, "Abyssal whip")
-        app._monitor_tick()
+        app._refresh_market()
         settle(lambda: not app._monitor_busy, 8)
         app.notebook.select(app.fliprec_tab)
         settle(lambda: app.flip_results, 8)
@@ -114,35 +114,36 @@ def scenario():
         for name, tab, tree in tabs:
             app.notebook.select(tab)
             settle()
-            check(not scrollbar_of(tab).winfo_ismapped(), f"{name} at 1380: no scrollbar")
+            # The Watchlist has the most columns, so it scrolls even at full size.
+            check(scrollbar_of(tab).winfo_ismapped() == (name == "Watchlist"), f"{name} at 1380: a scrollbar only if it needs one")
             wide_values[name] = tree.column(tree["columns"][0], "width")
         app.notebook.select(app.fliprec_tab)
         settle()
-        flip_actions = app.flip_refresh_btn.master
+        flip_actions = app.refresh_btn.master
         check(flip_actions.grid_info()["row"] == 0, "FlipRec at 1380: Refresh stays on the one row")
-        y = app.flip_refresh_btn.winfo_rooty()
-        app.flip_status.set("Fetching…")
+        y = app.refresh_btn.winfo_rooty()
+        app.market_status.set("Fetching…")
         settle()
-        app.flip_status.set("Capital must look like 5m, 250k or 1,000,000.")
+        app.market_status.set("Capital must look like 5m, 250k or 1,000,000.")
         settle()
-        check(app.flip_refresh_btn.winfo_rooty() == y, "FlipRec at 1380: a changing status doesn't make it jump")
-        app.flip_status.set("")
+        check(app.refresh_btn.winfo_rooty() == y, "FlipRec at 1380: a changing status doesn't make it jump")
+        app.market_status.set("")
 
         # Smallest window
         resize("900x560")
         for name, tab, tree in tabs:
             app.notebook.select(tab)
             settle()
-            check_table(name, tab, tree, name != "Volatile")
+            check_table(name, tab, tree, True)
 
         app.notebook.select(app.fliprec_tab)
         settle()
-        refresh = app.flip_refresh_btn
+        refresh = app.refresh_btn
         bar = flip_actions.master
         check(flip_actions.grid_info()["row"] == 1, "FlipRec at 900: Refresh moves to its own row")
         check(refresh.winfo_width() >= refresh.winfo_reqwidth(), f"FlipRec at 900: Refresh is whole: {refresh.winfo_width()}")
         check(right_edge(refresh, bar) <= bar.winfo_width(), "FlipRec at 900: and on screen")
-        app.flip_status.set("Prices fetched at 12:00:00")
+        app.market_status.set("Prices fetched at 12:00:00")
         settle()
         label = next(w for w in flip_actions.winfo_children() if w.winfo_class() == "TLabel")
         check(label.winfo_ismapped() and label.winfo_width() >= label.winfo_reqwidth(),
@@ -153,18 +154,18 @@ def scenario():
         long_status = "Error: " + "the server said no " * 12
         for size in ("900x560", "1120x560", "1380x860"):
             resize(size)
-            app.flip_status.set(long_status)
+            app.market_status.set(long_status)
             settle()
             check(right_edge(label, bar) <= bar.winfo_width() and label.winfo_height() > 25,
                   f"FlipRec at {size}: a long status wraps inside the bar: {right_edge(label, bar)} of {bar.winfo_width()}")
             check(label.winfo_width() >= label.winfo_reqwidth(), f"FlipRec at {size}: and shows in full")
             check(right_edge(refresh, bar) <= bar.winfo_width(), f"FlipRec at {size}: without moving Refresh off screen")
-        app.flip_status.set("Prices fetched at 12:00:00")
+        app.market_status.set("Prices fetched at 12:00:00")
         resize("900x560")
 
         app.notebook.select(app.alerts_tab)
         settle()
-        alert_actions = app.alerts_check_btn.master
+        alert_actions = app.refresh_btn.master
         check(alert_actions.grid_info()["row"] == 1, "Alerts at 900: the buttons move to their own row")
         for button in buttons(alert_actions):
             text = button.cget("text")
@@ -201,7 +202,7 @@ def scenario():
         for name, tab, tree in tabs:
             app.notebook.select(tab)
             settle()
-            check(not scrollbar_of(tab).winfo_ismapped(), f"{name} back at 1380: the scrollbar has gone")
+            check(scrollbar_of(tab).winfo_ismapped() == (name == "Watchlist"), f"{name} back at 1380: the scrollbar has gone if it's not needed")
             check(tree.column(tree["columns"][0], "width") == wide_values[name],
                   f"{name} back at 1380: columns return to their size")
         app.notebook.select(app.fliprec_tab)

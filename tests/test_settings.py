@@ -368,7 +368,7 @@ def scenario():
         label = warning_label()
         check(label.winfo_manager() == "", "the warning row takes no room until it's needed")
         db.watchlist_add(1, "Abyssal whip")
-        app._monitor_tick()
+        app._refresh_market()
         settle(lambda: not app._monitor_busy)
         check(app.settings_warning.get() == "", "no warning to start with")
 
@@ -426,7 +426,7 @@ def scenario():
             check(popups == [], f"none of them show an error box: {popups}")
         finally:
             settings.save = real_save
-        app._monitor_tick()
+        app._refresh_market()
         settle(lambda: not app._monitor_busy)
 
         # Finding the file damaged while running gets its own message

@@ -76,7 +76,7 @@ def fits(tree, name):
 def scenario():
     try:
         settle(lambda: app.item_data, 8)
-        app._monitor_tick()
+        app._refresh_market()
         settle(lambda: not app._monitor_busy, 8)
         check(root.winfo_width() == min(1380, root.winfo_screenwidth() - 80), f"opens wide enough for every column: {root.winfo_width()}")
         root.geometry("1380x860")
@@ -87,7 +87,7 @@ def scenario():
         # FlipRec
         tree = app.flip_tree
         columns = list(tree["columns"])
-        check(columns.index("cost") == columns.index("qty") + 1, "FlipRec: it sits right after Qty")
+        check(columns.index("cost") == columns.index("roi") + 1, "FlipRec: it sits right after ROI")
         check(tree.heading("cost", "text").startswith("Upfront"), "FlipRec: called Upfront")
         fits(tree, "FlipRec")
 
@@ -133,7 +133,7 @@ def scenario():
         settle()
         tree = app.alerts_tree
         columns = list(tree["columns"])
-        check(columns.index("cost") == columns.index("qty") + 1, "Alerts: it sits right after Qty")
+        check(columns.index("cost") == columns.index("roi") + 1, "Alerts: it sits right after ROI")
         fits(tree, "Alerts")
         alerts = db.get_active_alerts()
         check(alerts and all(a["cost"] == a["buy"] * a["qty"] for a in alerts), "Alerts: Buy x Qty")

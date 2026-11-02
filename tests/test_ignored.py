@@ -131,17 +131,17 @@ def choose(menu, label):
 
 
 def refresh_flip():
-    app._refresh_fliprec()
-    settle(lambda: str(app.flip_refresh_btn["state"]) == "normal", 5)
+    app._refresh_market()
+    settle(lambda: str(app.refresh_btn["state"]) == "normal", 5)
 
 
 def refresh_volatile():
     app._refresh_volatile()
-    settle(lambda: str(app.volatile_refresh_btn["state"]) == "normal", 5)
+    settle(lambda: str(app.refresh_btn["state"]) == "normal", 5)
 
 
 def tick():
-    app._monitor_tick()
+    app._refresh_market()
     settle(lambda: not app._monitor_busy, 5)
     root.update()
 
@@ -254,7 +254,7 @@ def scenario():
         check("Item 030" in volatile_names() and "Item 019" not in volatile_names(), "taken off the list, it returns to the top 100")
         check([id_map[i] for i in tree.selection()] == [40], "your selected row stays selected")
         refresh_volatile()
-        check("Item 120" not in volatile_names() and app.volatile_sort == (None, None), "Refresh still leaves it out and resets the sort as before")
+        check("Item 120" not in volatile_names() and app.volatile_sort == ("name", False), "Refresh still leaves it out and keeps the sort")
 
         # Open in Search
         tree, id_map = app.flip_tree, app.flip_id_map
@@ -300,7 +300,6 @@ def scenario():
         body = tkfont.Font(root=root, font=style.lookup("Treeview", "font"))
         room = tree.column("item", "minwidth") - 8
         check(body.measure(gui.IGNORED_TAG + "Ardougne teleport (tablet)") <= room, "a long name fits next to the tag")
-        check(sum(tree.column(c, "minwidth") for c in tree["columns"]) <= tree.winfo_width(), "the table still fits at full size")
 
         menu = right_click(tree, iid_of(tree, id_map, 12))
         check(labels(menu)[:2] == ["Remove from Watchlist", "Ignore item"], f"on the Watchlist it offers removal: {labels(menu)}")
@@ -319,6 +318,17 @@ def scenario():
         app.watch_btn.invoke()
         root.update()
         check(70 in app._ignored and tagged in watch_names(), "and adds it back, still tagged")
+
+        # Search has its own button for the Ignored List
+        check(app.ignore_btn.cget("text") == "Remove from Ignored List", f"Search says it's ignored: {app.ignore_btn.cget('text')}")
+        app.ignore_btn.invoke()
+        root.update()
+        check(70 not in app._ignored and "Item 070" in watch_names() and "Item 070" in flip_names(), "the Search button takes it off the list")
+        check(app.ignore_btn.cget("text") == "Ignore item", "and then offers to ignore it")
+        app.ignore_btn.invoke()
+        root.update()
+        check(70 in app._ignored and tagged in watch_names() and "Item 070" not in flip_names(), "and ignores it from Search")
+        check("Item 070" in ignored_names(), "it's on the Ignored List tab")
 
         # Taken off the list, the tag goes and it's back on FlipRec
         app._unignore([70])

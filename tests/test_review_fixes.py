@@ -314,7 +314,7 @@ def scenario():
         settle(lambda: app.item_data)
         settle(lambda: 24 * 3600 in app._volume.ready_windows(), 20)
         settle(lambda: app._volume_ready == app._volume.ready_windows())
-        app._monitor_tick()   # the first check may have run before the history was ready
+        app._refresh_market()   # the first check may have run before the history was ready
         settle()
         check(app.status_var.get() == "2 items loaded.", "#3 header back to normal after the download: " + app.status_var.get())
 
@@ -356,9 +356,9 @@ def scenario():
         app._apply_flip_filters()
         settle()
         check("may read slightly low" in app.flip_banner.get(), "#3 FlipRec explains the *")
-        app._monitor_tick()
+        app._refresh_market()
         settle()
-        check("may read slightly low" in app.alerts_status.get(), "#3 Alerts explains the *: " + app.alerts_status.get())
+        check("may read slightly low" in app.market_status.get(), "#3 Alerts explains the *: " + app.market_status.get())
 
         # The leak: finished work reaches the window without threads calling Tk
         got = []
@@ -381,7 +381,7 @@ def scenario():
         check(growth <= 3, f"LEAK: 100 background jobs leave no handles behind (+{growth}; was +100)")
         before = handles()
         for _ in range(30):
-            app._monitor_tick()
+            app._refresh_market()
             settle(lambda: not app._monitor_busy, 10)
         time.sleep(0.3)
         settle()

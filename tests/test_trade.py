@@ -140,7 +140,7 @@ def scenario():
         settle(lambda: app.item_data)
         settle(lambda: app._market)
         app.notebook.select(app.alerts_tab)
-        app._monitor_tick()
+        app._refresh_market()
         settle()
         t = table(app.alerts_tree, app.alert_id_map)
         check(set(t) == {"Good item"}, f"alerts drop the fake margin and the item not traded in 5 min: {sorted(t)}")
@@ -181,19 +181,19 @@ def scenario():
         # Failed margin check goes away if the margin firms up, and vice versa
         STATE["m5"] = {}
         app._volume._fallbacks.clear()
-        app._monitor_tick()
+        app._refresh_market()
         settle()
         check(set(table(app.alerts_tree, app.alert_id_map)) == {"Good item", "Voidwaker"}, "no 5m data: margin isn't marked down")
         STATE["m5"] = M5
         app._volume._fallbacks.clear()
-        app._monitor_tick()
+        app._refresh_market()
         settle()
         t = table(app.alerts_tree, app.alert_id_map)
-        check(set(t) == {"Good item"} and "1 expired" in app.alerts_status.get(), "margin losing 5m support expires its alert: " + app.alerts_status.get())
+        check(set(t) == {"Good item"} and "1 expired" in app.market_status.get(), "margin losing 5m support expires its alert: " + app.market_status.get())
 
         # FlipRec shows why
-        app._refresh_fliprec()
-        settle(lambda: app.flip_refresh_btn.instate(["!disabled"]))
+        app._refresh_market()
+        settle(lambda: app.refresh_btn.instate(["!disabled"]))
         app._apply_flip_filters()
         settle()
         f = table(app.flip_tree, app.flip_id_map)
