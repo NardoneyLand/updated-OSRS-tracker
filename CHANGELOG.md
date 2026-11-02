@@ -3,6 +3,18 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.9 — 2026-11-02
+
+**New**
+- Drag a column header to move that column on FlipRec, Alerts, Watchlist or Volatile.
+  Each tab remembers its own order, and Item always stays first. Right-click a header
+  and choose Reset columns to put a tab back as it was.
+
+**Fixed**
+- Clicking a column header twice quickly to reverse the sort no longer opens the
+  selected row in Search.
+- Column headers stay readable when you point at them.
+
 ## 1.4.8 — 2026-11-02
 
 **New**

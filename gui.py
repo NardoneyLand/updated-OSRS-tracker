@@ -278,6 +278,16 @@ def row_values(columns: list, cells: dict) -> list:
     return [cells.get(column[0], "") for column in columns]
 
 
+def clean_column_order(saved, columns) -> list:
+    """A saved column order, made safe to use: Item first, no unknown or repeated
+    columns, and any new column added at the end. None if there's no saved order."""
+    if not isinstance(saved, list):
+        return None
+    known = [c for c in saved if isinstance(c, str) and c in columns and c != "item"]
+    known = list(dict.fromkeys(known))
+    return ["item"] + known + [c for c in columns if c != "item" and c not in known]
+
+
 # ── Help text ─────────────────────────────────────────────────────────────────
 
 HELP_SECTIONS = [
@@ -322,7 +332,11 @@ HELP_SECTIONS = [
      "in the same order: Item, Buy, Sell, Qty, ROI, Upfront, Est. profit, Vol 1h "
      "and Last trade. Each tab adds its own to the right, and a Search result "
      "shows the same values. If they don't all fit, scroll sideways. Your sort, "
-     "selected rows and scroll position stay when prices update."),
+     "selected rows and scroll position stay when prices update.\n\n"
+     "To move a column, drag its header left or right. A gold line shows where "
+     "it will land, and each tab remembers its own order. Item always stays "
+     "first. To put a tab back as it was, right-click any header and choose "
+     "Reset columns. Clicking a header still sorts by it."),
 
     ("Right-click menu",
      "Right-click a row on FlipRec, Alerts, Watchlist or Volatile:\n\n"
@@ -662,6 +676,8 @@ FOOTNOTE_WIDTH = 1000         # the longest line under a table, in pixels
 STATUS_ROOM = 200             # room for "Prices updated 12:00:00"
 CAPITAL_ERROR = "Capital must look like 5m, 250k or 1,000,000."
 SEARCH_FACTS_GAP = 30         # seconds; coming back to Search needn't re-download
+COLUMN_DRAG_START = 8         # pixels a header moves before it's a drag, not a click
+COLUMN_DRAG_EDGE = 30         # dragging this close to the side scrolls the table
 
 
 def shared_columns(item_width=184, name_key="name", age_key="age",
@@ -695,6 +711,9 @@ class OSRSTrackerApp:
         self._refresh_again = False    # asked for while a fetch was running
         self._ignored = set()          # item ids on the Ignored List
         self._row_menu = None          # the open right-click menu
+        self._column_tables = {}       # table -> its name in the saved order
+        self._column_drag = None       # the header being dragged
+        self._column_markers = {}      # table -> the line showing where it'll land
         self._monitor_started = False
         self._monitor_busy = False
         self._monitor_job = None       # the pending timer for the next check
@@ -1036,6 +1055,8 @@ class OSRSTrackerApp:
                         font=("Georgia", 10, "bold"),
                         bordercolor=COLOR_BORDER,
                         padding=6)
+        style.map("Treeview.Heading",
+                  background=[("pressed", COLOR_BORDER), ("active", COLOR_BORDER)])
         style.map("Treeview",
                   background=[("selected", COLOR_BORDER)],
                   foreground=[("selected", COLOR_ACCENT_HI)])
@@ -1078,6 +1099,10 @@ class OSRSTrackerApp:
         # Price format (Short 1.2K / Exact 1,240): one setting for every table.
         self.flip_format_var = tk.StringVar(
             value=settings.load().get("flip_price_format", PRICE_FORMATS[0]))
+        saved = settings.load().get("column_order")
+        self._column_orders = ({name: order for name, order in saved.items()
+                                if isinstance(order, list)}
+                               if isinstance(saved, dict) else {})
         self._build_top_bar()
 
         # Notebook
@@ -1771,9 +1796,10 @@ class OSRSTrackerApp:
         tree.tag_configure("alert", foreground=COLOR_GREEN)
         self._pack_table(frame, tree)
         tree.bind("<Double-Button-1>",
-                  lambda _e: self._open_selected_in_search(
-                      self.alerts_tree, self.alert_id_map))
+                  lambda e: self._on_row_double_click(
+                      e, self.alerts_tree, self.alert_id_map))
         self.alerts_tree = tree
+        self._movable_columns(tree, "alerts")
         self.alert_id_map = {}
         self._add_row_menu(tree, self.alert_id_map)
         # Kept across refreshes; newest first until a header is clicked.
@@ -2059,10 +2085,11 @@ class OSRSTrackerApp:
                            background=COLOR_TARGET_ROW)
         self._pack_table(frame, tree)
         tree.bind("<Double-Button-1>",
-                  lambda _e: self._open_selected_in_search(
-                      self.watch_tree, self.watch_id_map))
+                  lambda e: self._on_row_double_click(
+                      e, self.watch_tree, self.watch_id_map))
         tree.bind("<<TreeviewSelect>>", self._on_watch_selected)
         self.watch_tree = tree
+        self._movable_columns(tree, "watchlist")
         self.watch_id_map = {}
         self._add_row_menu(tree, self.watch_id_map)
         # Kept across refreshes; oldest added first until a header is clicked.
@@ -2360,8 +2387,8 @@ class OSRSTrackerApp:
             tree.column(cid, width=width, anchor=anchor)
         self._pack_table(frame, tree)
         tree.bind("<Double-Button-1>",
-                  lambda _e: self._open_selected_in_search(
-                      self.ignored_tree, self.ignored_id_map))
+                  lambda e: self._on_row_double_click(
+                      e, self.ignored_tree, self.ignored_id_map))
         self.ignored_tree = tree
         self.ignored_id_map = {}
         self._add_row_menu(tree, self.ignored_id_map)
@@ -2437,6 +2464,93 @@ class OSRSTrackerApp:
         self._render_watchlist()
         self._update_watch_btn()
 
+    # ── Moving columns ────────────────────────────────────────────────────────
+
+    def _movable_columns(self, tree, name: str):
+        """Drag a header to move its column, on this table only. Item stays
+        first: it names the row while you scroll, and holds "list is empty"."""
+        self._column_tables[tree] = name
+        order = clean_column_order(self._column_orders.get(name),
+                                   list(tree["columns"]))
+        if order:
+            tree.configure(displaycolumns=order)
+        tree.bind("<ButtonPress-1>", lambda e: self._column_press(e, tree))
+        tree.bind("<B1-Motion>", lambda e: self._column_motion(e, tree))
+        tree.bind("<ButtonRelease-1>", lambda e: self._column_release(e, tree))
+
+    def _display_order(self, tree) -> list:
+        shown = tree["displaycolumns"]
+        shown = (shown,) if isinstance(shown, str) else shown
+        return list(tree["columns"]) if "#all" in shown else list(shown)
+
+    def _column_press(self, event, tree):
+        self._column_drag = None
+        if tree.identify_region(event.x, event.y) != "heading":
+            return                     # a row, or a separator to resize with
+        heading = tree.identify_column(event.x)
+        column = self._display_order(tree)[int(heading[1:]) - 1]
+        if column != "item":
+            self._column_drag = {"column": column, "heading": heading,
+                                 "x": event.x, "moving": False}
+
+    def _column_drop(self, tree, x: int) -> tuple:
+        """Where a header dropped at x would land: (position, x of that gap)."""
+        order = self._display_order(tree)
+        widths = [tree.column(c, "width") for c in order]
+        offset = tree.xview()[0] * sum(widths)
+        left = widths[0]
+        position, gap = 1, left
+        for i, width in enumerate(widths[1:], start=1):
+            if x + offset > left + width / 2:
+                position, gap = i + 1, left + width
+            left += width
+        return position, int(gap - offset)
+
+    def _column_motion(self, event, tree):
+        drag = self._column_drag
+        if not drag:
+            return None
+        if not drag["moving"]:
+            if abs(event.x - drag["x"]) < COLUMN_DRAG_START:
+                return None
+            drag["moving"] = True
+            # Not pressed any more, so letting go won't count as a click to sort.
+            tree.tk.call(tree._w, "heading", drag["heading"], "state", "!pressed")
+            tree.configure(cursor="sb_h_double_arrow")
+        total = sum(tree.column(c, "width") for c in tree["columns"])
+        step = 40 / total
+        if event.x < COLUMN_DRAG_EDGE:
+            tree.xview_moveto(max(0, tree.xview()[0] - step))
+        elif event.x > tree.winfo_width() - COLUMN_DRAG_EDGE:
+            tree.xview_moveto(tree.xview()[0] + step)
+        marker = self._column_markers.get(tree)
+        if not marker:
+            marker = self._column_markers[tree] = tk.Frame(
+                tree, bg=COLOR_ACCENT, width=3)
+        marker.place(x=self._column_drop(tree, event.x)[1] - 1, y=0, relheight=1)
+        return "break"                 # Tk would press the header again
+
+    def _column_release(self, event, tree):
+        drag, self._column_drag = self._column_drag, None
+        if not drag or not drag["moving"]:
+            return
+        tree.configure(cursor="")
+        self._column_markers[tree].place_forget()
+        order = self._display_order(tree)
+        position = self._column_drop(tree, event.x)[0]
+        before = order.index(drag["column"])
+        order.remove(drag["column"])
+        order.insert(position - 1 if position > before else position, drag["column"])
+        if order != self._display_order(tree):
+            tree.configure(displaycolumns=order)
+            self._column_orders[self._column_tables[tree]] = order
+            self._save_settings({"column_order": self._column_orders})
+
+    def _reset_columns(self, tree):
+        tree.configure(displaycolumns="#all")
+        self._column_orders.pop(self._column_tables[tree], None)
+        self._save_settings({"column_order": self._column_orders})
+
     # ── Right-click menu ──────────────────────────────────────────────────────
 
     def _add_row_menu(self, tree, id_map):
@@ -2448,26 +2562,44 @@ class OSRSTrackerApp:
             tree.bind("<Control-Button-1>", show)
 
     def _show_row_menu(self, event, tree, id_map):
+        region = tree.identify_region(event.x, event.y)
+        if region in ("heading", "separator"):
+            if tree in self._column_tables:
+                self._popup(self._build_header_menu(tree), event)
+            return
         # identify_row alone gives the first row for clicks low on a header.
         clicked = tree.identify_row(event.y)
-        if (tree.identify_region(event.x, event.y) != "cell"
-                or clicked not in id_map):      # or a "list is empty" row
+        if region != "cell" or clicked not in id_map:   # or a "list is empty" row
             return
         if clicked not in tree.selection():
             tree.selection_set(clicked)
         tree.focus(clicked)
-        menu = self._build_row_menu(tree, id_map, clicked)
+        self._popup(self._build_row_menu(tree, id_map, clicked), event)
+
+    def _popup(self, menu, event):
         try:
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
 
-    def _build_row_menu(self, tree, id_map, clicked) -> tk.Menu:
+    def _new_menu(self, tree) -> tk.Menu:
         if self._row_menu:
             self._row_menu.destroy()
-        menu = self._row_menu = tk.Menu(
+        self._row_menu = tk.Menu(
             tree, tearoff=0, bg=COLOR_PANEL, fg=COLOR_TEXT,
             activebackground=COLOR_BORDER, activeforeground=COLOR_ACCENT_HI)
+        return self._row_menu
+
+    def _build_header_menu(self, tree) -> tk.Menu:
+        menu = self._new_menu(tree)
+        moved = self._display_order(tree) != list(tree["columns"])
+        menu.add_command(label="Reset columns",
+                         state="normal" if moved else "disabled",
+                         command=lambda: self._reset_columns(tree))
+        return menu
+
+    def _build_row_menu(self, tree, id_map, clicked) -> tk.Menu:
+        menu = self._new_menu(tree)
 
         items = [(id_map[iid],
                   str(tree.set(iid, "item")).removeprefix(IGNORED_TAG))
@@ -2618,6 +2750,14 @@ class OSRSTrackerApp:
             self._render_result(**self._search_shown)
         self._draw_history_chart()
 
+    def _on_row_double_click(self, event, tree, id_map):
+        """Open a row in Search. Two quick clicks on a header aren't that: the
+        second is another click, which can sort or start moving the column."""
+        if tree.identify_region(event.x, event.y) == "cell":
+            self._open_selected_in_search(tree, id_map)
+        elif tree in self._column_tables:
+            self._column_press(event, tree)
+
     def _open_selected_in_search(self, tree, id_map):
         sel = tree.selection()
         self._open_in_search(id_map.get(sel[0]) if sel else None)
@@ -2679,8 +2819,11 @@ class OSRSTrackerApp:
         tree.tag_configure("down", foreground=COLOR_RED)
 
         self._pack_table(frame, tree)
-        tree.bind("<Double-Button-1>", self._on_volatile_click)
+        tree.bind("<Double-Button-1>",
+                  lambda e: self._on_row_double_click(
+                      e, self.volatile_tree, self.volatile_id_map))
         self.volatile_tree = tree
+        self._movable_columns(tree, "volatile")
         self.volatile_id_map = {}  # tree row id -> item id
         self._add_row_menu(tree, self.volatile_id_map)
 
@@ -2817,23 +2960,6 @@ class OSRSTrackerApp:
                 ages[iid] = r["traded_at"]
         self._restore_tree_view(tree, self.volatile_id_map, view)
 
-    def _on_volatile_click(self, _event):
-        sel = self.volatile_tree.selection()
-        if not sel:
-            return
-        item_id = self.volatile_id_map.get(sel[0])
-        if not item_id:
-            return
-        item = next((it for it in self.item_data
-                     if it.get("id") == item_id), None)
-        if not item:
-            return
-        # Jump to Search tab with this item loaded
-        self.notebook.select(self.search_tab)
-        self.search_var.set(item["name"])
-        self._hide_dropdown()
-        self._lookup_item(item)
-
     # ── FlipRec tab ───────────────────────────────────────────────────────────
 
     FLIP_COLUMNS = shared_columns() + [
@@ -2887,8 +3013,11 @@ class OSRSTrackerApp:
         tree.tag_configure("warn", foreground=COLOR_YELLOW)
         tree.tag_configure("dim", foreground=COLOR_DIM)
         self._pack_table(frame, tree)
-        tree.bind("<Double-Button-1>", self._on_fliprec_click)
+        tree.bind("<Double-Button-1>",
+                  lambda e: self._on_row_double_click(
+                      e, self.flip_tree, self.flip_id_map))
         self.flip_tree = tree
+        self._movable_columns(tree, "fliprec")
         self.flip_id_map = {}
         self._add_row_menu(tree, self.flip_id_map)
         self.flip_results = []        # computed for the current filters
@@ -3036,18 +3165,6 @@ class OSRSTrackerApp:
             self.flip_id_map[iid] = r["item_id"]
             ages[iid] = r["traded_at"]
         self._restore_tree_view(tree, self.flip_id_map, view)
-
-    def _on_fliprec_click(self, _event):
-        sel = self.flip_tree.selection()
-        item_id = self.flip_id_map.get(sel[0]) if sel else None
-        item = next((it for it in self.item_data
-                     if it.get("id") == item_id), None) if item_id else None
-        if not item:
-            return
-        self.notebook.select(self.search_tab)
-        self.search_var.set(item["name"])
-        self._hide_dropdown()
-        self._lookup_item(item)
 
     # ── News tab ──────────────────────────────────────────────────────────────
 

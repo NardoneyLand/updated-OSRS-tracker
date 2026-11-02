@@ -174,10 +174,13 @@ def scenario():
         tree.yview_moveto(0)
         root.update()
         row_top = tree.bbox(tree.get_children()[0], "item")[1]
+        shown = []
         for y in range(1, row_top):
             tree.event_generate("<Button-3>", x=20, y=y)
-        root.update()
-        check(row_top > 5 and not menus, f"no menu anywhere on a column header ({row_top} pixels tall)")
+            root.update()
+            shown.append(labels(menus[-1]) if menus else None)
+        check(row_top > 5 and ["Reset columns"] in shown and all(m in (None, ["Reset columns"]) for m in shown), f"only the column menu on a header ({row_top} pixels tall): {shown[:2]}")
+        menus.clear()
 
         # Add to Watchlist
         tree.selection_set(first, second)
