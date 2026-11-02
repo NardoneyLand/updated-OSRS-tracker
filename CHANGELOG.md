@@ -3,6 +3,27 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.3 — 2026-11-01
+
+**Changed**
+- FlipRec's Signal column is now called Note, and says "Below 1h average" or
+  "Above 1h average" instead of "Dip - may rebound" or "Spike - may fall". Replayed
+  over real prices, reversals are usually smaller than the 2% tax, so the old
+  wording promised more than it should have.
+
+**Fixed**
+- Ask AI no longer says your next question starts a new conversation when it
+  won't, such as after saving instructions and then clearing them.
+- Instructions can't be opened while an answer is running, so a saved note can't
+  land in the middle of the reply.
+- Long status messages on Ask AI have their own line, so they can't push the
+  buttons off the window.
+- Pressing Escape or closing the Instructions window now asks first if you have
+  unsaved changes, and it tells you if your instructions couldn't be saved.
+- A problem reading the settings file can't drop your instructions mid-session,
+  and a hand-edited file can't send more than the 4,000 character limit.
+- The Search tab no longer mentions the Buy / Hold / Sell signal removed in 1.4.0.
+
 ## 1.4.2 — 2026-11-01
 
 **Added**

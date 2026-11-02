@@ -159,6 +159,13 @@ def parse_targets(below_text: str, above_text: str) -> tuple:
     return below, above
 
 
+def saved_ai_instructions(prefs: dict) -> str:
+    """The instructions in the settings. Every question sends them, so a
+    hand-edited value is held to the limit, and ignored if it isn't text."""
+    saved = prefs.get("ai_instructions")
+    return saved.strip()[:ai.MAX_INSTRUCTIONS] if isinstance(saved, str) else ""
+
+
 def fmt_target(target, hit, fmt) -> str:
     """A target price for the table, ticked once the market has reached it."""
     if not target:
@@ -312,9 +319,10 @@ HELP_SECTIONS = [
      "usual hour over the last day; ▼ means under half.\n"
      "    •  Last trade — how long ago the older side last traded. "
      "⏱ means over 5 minutes, so the margin may have moved.\n"
-     "    •  Signal — the current price vs its 1-hour average: "
-     "\"Dip - may rebound\" (3%+ below), \"Spike - may fall\" (3%+ "
-     "above) or \"Extreme move - caution\" (25%+ away).\n\n"
+     "    •  Note — how far the current price is from its 1-hour average: "
+     "\"Below 1h average\" (3%+ below), \"Above 1h average\" (3%+ above) or "
+     "\"Extreme move - caution\" (25%+ away). It also says when the last 5 "
+     "minutes' prices don't back up the margin.\n\n"
      "Click a column header to sort; click again to reverse. Double-click "
      "a row to open the item in Search."),
 
@@ -462,7 +470,7 @@ HELP_SECTIONS = [
      "Prices often partly reverse after a big move, but usually by less than "
      "the 2% GE tax, so simply doing the opposite doesn't reliably make money "
      "either. Use the margins on FlipRec for flipping decisions.\n\n"
-     "The Signal column on FlipRec only says how far the price is from its "
+     "The Note column on FlipRec only reports where the price is against its "
      "1-hour average. It isn't a recommendation to buy or sell."),
 
     ("Ask AI — suggestions from your own AI account",
@@ -499,7 +507,8 @@ HELP_SECTIONS = [
      "anything, and it may not follow them perfectly.\n"
      "    •  Replies appear as plain text, so bold text, headings and tables "
      "won't display. Line-by-line layouts work well.\n"
-     "    •  Saving a change starts a new conversation with your next question.\n"
+     "    •  Saving a change starts a new conversation with your next question. "
+     "You can't open them while an answer is running.\n"
      "    •  You can save up to 4,000 characters. Longer instructions cost more, "
      "because every question sends them.\n\n"
      "What it costs: the service bills your account for each question. "
@@ -716,14 +725,18 @@ class OSRSTrackerApp:
         dlg.bind("<Escape>", cancel)
         dlg.protocol("WM_DELETE_WINDOW", cancel)
 
+        self._show_dialog(dlg)
+        self.root.wait_window(dlg)
+        return result["ok"]
+
+    def _show_dialog(self, dlg):
+        """Centre a finished dialog and keep the focus on it until it closes."""
         dlg.update_idletasks()
         x = (dlg.winfo_screenwidth() - dlg.winfo_reqwidth()) // 2
         y = (dlg.winfo_screenheight() - dlg.winfo_reqheight()) // 3
         dlg.geometry(f"+{x}+{y}")
         dlg.grab_set()
         dlg.lift()
-        self.root.wait_window(dlg)
-        return result["ok"]
 
     def _update_contact_label(self):
         if hasattr(self, "contact_label_var"):
@@ -1001,8 +1014,8 @@ class OSRSTrackerApp:
 
         self.placeholder_label = ttk.Label(
             self.result_frame,
-            text=("\nStart typing to search — see live prices, a "
-                  "buy/hold/sell signal and the item's price chart.\n"),
+            text=("\nStart typing to search — see live prices, recent "
+                  "trading and the item's price chart.\n"),
             style="Panel.TLabel", justify="center",
         )
         self.placeholder_label.pack(expand=True, pady=10)
@@ -1957,12 +1970,7 @@ class OSRSTrackerApp:
         dlg.bind("<Return>", save)
         dlg.bind("<Escape>", close)
 
-        dlg.update_idletasks()
-        x = (dlg.winfo_screenwidth() - dlg.winfo_reqwidth()) // 2
-        y = (dlg.winfo_screenheight() - dlg.winfo_reqheight()) // 3
-        dlg.geometry(f"+{x}+{y}")
-        dlg.grab_set()
-        dlg.lift()
+        self._show_dialog(dlg)
 
     def _remove_selected_watch(self):
         for iid in self.watch_tree.selection():
@@ -2235,7 +2243,7 @@ class OSRSTrackerApp:
         ("volume",  "Vol 1h",      "volume",    75,  "e",      True),
         ("age",     "Last trade",  "age",       88,  "e",      False),
         ("verdict", "Verdict",     "verdict",   80,  "center", True),
-        ("signal",  "Signal",      "reversion", 165, "w",      False),
+        ("signal",  "Note",        "reversion", 165, "w",      False),
     ]
 
     def _build_fliprec_tab(self) -> ttk.Frame:
@@ -2908,6 +2916,7 @@ class OSRSTrackerApp:
         self._ai_cancel = None         # set while a question is running
         self._ai_seq = 0               # latest question (see _ai_send)
         self._ai_live_models = {}      # (provider, url) -> model IDs
+        self._ai_instructions = saved_ai_instructions(prefs)
 
         bar = ttk.Frame(frame)
         bar.pack(fill="x", padx=20, pady=(20, 10))
@@ -2964,21 +2973,12 @@ class OSRSTrackerApp:
         self.ai_stop_btn = ttk.Button(input_row, text="Stop", state="disabled",
                                       command=self._ai_stop)
         self.ai_stop_btn.pack(side="right", padx=(8, 0))
-        self.ai_input = tk.Text(
-            input_row, height=3, wrap="word",
-            background=COLOR_INPUT, foreground=COLOR_TEXT,
-            insertbackground=COLOR_ACCENT,
-            highlightthickness=1, highlightbackground=COLOR_BORDER,
-            highlightcolor=COLOR_ACCENT, borderwidth=0,
-            padx=8, pady=6, font=FONT_BODY)
+        self.ai_input = self._input_box(tk.Text, input_row, height=3)
         self.ai_input.pack(side="left", fill="x", expand=True)
         self.ai_input.bind("<Return>", self._on_ai_input_return)
 
         starters = ttk.Frame(frame)
         starters.pack(side="bottom", fill="x", padx=20, pady=(0, 8))
-        self.ai_status = tk.StringVar(value="")
-        ttk.Label(starters, textvariable=self.ai_status, style="Dim.TLabel"
-                  ).pack(side="right")
         for label, question in AI_STARTERS:
             ttk.Button(starters, text=label, style="Range.TButton",
                        command=lambda q=question: self._ai_send(q)
@@ -2988,6 +2988,11 @@ class OSRSTrackerApp:
             command=self._ai_instructions_dialog)
         self.ai_instructions_btn.pack(side="left", padx=(10, 0))
         self._update_ai_instructions_btn()
+
+        self.ai_status = tk.StringVar(value="")
+        ttk.Label(frame, textvariable=self.ai_status, style="Dim.TLabel",
+                  wraplength=840, justify="left"
+                  ).pack(side="bottom", anchor="w", padx=20, pady=(0, 4))
 
         text = scrolledtext.ScrolledText(
             frame, wrap="word", state="disabled",
@@ -3007,6 +3012,15 @@ class OSRSTrackerApp:
         self._show_ai_models()
         self._ai_write(AI_INTRO + "\n", "note")
         return frame
+
+    def _input_box(self, widget, parent, **options):
+        """A multi-line box for typing into."""
+        return widget(parent, wrap="word",
+                      background=COLOR_INPUT, foreground=COLOR_TEXT,
+                      insertbackground=COLOR_ACCENT,
+                      highlightthickness=1, highlightbackground=COLOR_BORDER,
+                      highlightcolor=COLOR_ACCENT, borderwidth=0,
+                      padx=8, pady=6, font=FONT_BODY, **options)
 
     def _ai_model_for(self, provider: str) -> str:
         """The model last used with this provider, or its default."""
@@ -3093,6 +3107,7 @@ class OSRSTrackerApp:
     def _set_ai_busy(self, busy: bool):
         self.ai_send_btn.config(state="disabled" if busy else "normal")
         self.ai_stop_btn.config(state="normal" if busy else "disabled")
+        self.ai_instructions_btn.config(state="disabled" if busy else "normal")
 
     def _ai_send(self, question: str = None):
         if self._ai_cancel:
@@ -3117,7 +3132,7 @@ class OSRSTrackerApp:
         self._save_ai_model()
 
         chat = self._ai_chat
-        instructions = self._ai_instructions()
+        instructions = self._ai_instructions
         same_model = chat and (chat.provider, chat.model, chat.url) == (provider, model, url)
         if not same_model or chat.instructions != instructions:
             if chat and chat.history:
@@ -3191,18 +3206,13 @@ class OSRSTrackerApp:
         self.ai_text.configure(state="disabled")
         self._ai_write(AI_INTRO + "\n", "note")
 
-    def _ai_instructions(self) -> str:
-        """The instructions saved for the AI, or an empty string."""
-        saved = settings.load().get("ai_instructions")
-        return saved.strip() if isinstance(saved, str) else ""
-
     def _update_ai_instructions_btn(self):
         self.ai_instructions_btn.config(
-            text="Instructions ✓" if self._ai_instructions() else "Instructions…")
+            text="Instructions ✓" if self._ai_instructions else "Instructions…")
 
     def _ai_instructions_dialog(self):
         """Dialog to write the standing instructions sent with every question."""
-        saved = self._ai_instructions()
+        saved = self._ai_instructions
 
         dlg = tk.Toplevel(self.root)
         dlg.title("Instructions for the AI")
@@ -3220,13 +3230,7 @@ class OSRSTrackerApp:
             "can't change the app's data, and the AI may not follow them "
             "perfectly.")).pack(anchor="w", pady=(0, 10))
 
-        box = scrolledtext.ScrolledText(
-            body, width=68, height=12, wrap="word",
-            background=COLOR_INPUT, foreground=COLOR_TEXT,
-            insertbackground=COLOR_ACCENT,
-            highlightthickness=1, highlightbackground=COLOR_BORDER,
-            highlightcolor=COLOR_ACCENT, borderwidth=0,
-            padx=8, pady=6, font=FONT_BODY)
+        box = self._input_box(scrolledtext.ScrolledText, body, width=68, height=12)
         box.pack(fill="x")
         box.insert("1.0", saved)
         box.focus_set()
@@ -3265,19 +3269,38 @@ class OSRSTrackerApp:
                         "choose. Don't include passwords or keys. Longer "
                         "instructions cost more, because every question sends them.")
                   ).pack(anchor="w", pady=(10, 0))
+        error = tk.StringVar()
+        tk.Label(body, textvariable=error, bg=COLOR_BG, fg=COLOR_RED,
+                 font=FONT_BODY, wraplength=560, justify="left"
+                 ).pack(anchor="w", pady=(4, 0))
 
-        def close(_e=None):
+        def close():
             dlg.destroy()
+
+        def leave(_e=None):
+            # A long layout is a lot to lose to a stray Escape.
+            if typed() == saved or messagebox.askyesno(
+                    "Discard your changes?",
+                    "Close without saving your changes?", parent=dlg):
+                close()
 
         def save():
             text = typed()
             if len(text) > ai.MAX_INSTRUCTIONS:
                 return                 # the count already says it's too long
             if text != saved:
-                settings.save({"ai_instructions": text})
+                try:
+                    settings.save({"ai_instructions": text})
+                except OSError:
+                    error.set("Couldn't save your instructions, so nothing "
+                              "changed. Check that the data folder isn't "
+                              "read-only or full, then try again.")
+                    return
+                self._ai_instructions = text
                 self._update_ai_instructions_btn()
                 note = "Instructions saved." if text else "Instructions cleared."
-                if self._ai_chat and self._ai_chat.history:
+                chat = self._ai_chat
+                if chat and chat.history and text != chat.instructions:
                     note += " Your next question starts a new conversation."
                 self._ai_write(note + "\n", "note")
             close()
@@ -3287,14 +3310,9 @@ class OSRSTrackerApp:
         ttk.Button(buttons, text="Cancel", command=close).pack(side="right")
         ttk.Button(buttons, text="Save", command=save
                    ).pack(side="right", padx=(0, 8))
-        dlg.bind("<Escape>", close)
-
-        dlg.update_idletasks()
-        x = (dlg.winfo_screenwidth() - dlg.winfo_reqwidth()) // 2
-        y = (dlg.winfo_screenheight() - dlg.winfo_reqheight()) // 3
-        dlg.geometry(f"+{x}+{y}")
-        dlg.grab_set()
-        dlg.lift()
+        dlg.bind("<Escape>", leave)
+        dlg.protocol("WM_DELETE_WINDOW", leave)
+        self._show_dialog(dlg)
 
     def _ai_key_dialog(self, provider: str) -> bool:
         """Modal dialog to add or remove an API key. True if a key was saved."""
@@ -3418,12 +3436,7 @@ class OSRSTrackerApp:
         dlg.bind("<Escape>", close)
         dlg.protocol("WM_DELETE_WINDOW", close)
 
-        dlg.update_idletasks()
-        x = (dlg.winfo_screenwidth() - dlg.winfo_reqwidth()) // 2
-        y = (dlg.winfo_screenheight() - dlg.winfo_reqheight()) // 3
-        dlg.geometry(f"+{x}+{y}")
-        dlg.grab_set()
-        dlg.lift()
+        self._show_dialog(dlg)
         self.root.wait_window(dlg)
         return result["ok"]
 

@@ -313,9 +313,9 @@ def reversion_signal(current_mid: float, avg_mid: float) -> Tuple[str, float]:
     if abs(pct) > REVERSION_EXTREME:
         return "Extreme move - caution", pct
     if pct <= -REVERSION_THRESHOLD:
-        return "Dip - may rebound", pct
+        return "Below 1h average", pct
     if pct >= REVERSION_THRESHOLD:
-        return "Spike - may fall", pct
+        return "Above 1h average", pct
     return "", pct
 
 

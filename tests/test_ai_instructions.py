@@ -15,7 +15,7 @@ tmp = tempfile.mkdtemp()
 settings.SETTINGS_FILE = os.path.join(tmp, "settings.json")
 db.DB_NAME = os.path.join(tmp, "t.db")
 settings.save({"ua_contact": "test-contact"})
-import ai, aitools, api, gui, scraper
+import ai, aitools, analyzer, api, gui, scraper
 
 failures = []
 
@@ -127,6 +127,16 @@ def label_texts(widget):
     return found
 
 
+def label_vars(widget):
+    """The text of labels that show a variable, such as error messages."""
+    found = []
+    for child in widget.winfo_children():
+        if isinstance(child, tk.Label) and str(child.cget("textvariable")):
+            found.append(root.getvar(str(child.cget("textvariable"))))
+        found += label_vars(child)
+    return found
+
+
 def open_dialog():
     app.ai_instructions_btn.invoke()
     root.update()
@@ -172,11 +182,11 @@ def scenario():
         text_box(dlg).insert("1.0", "not saved")
         button(dlg, "Cancel").invoke()
         root.update()
-        check(not dlg.winfo_exists() and app._ai_instructions() == "", "Cancel saves nothing")
+        check(not dlg.winfo_exists() and app._ai_instructions == "", "Cancel saves nothing")
 
         # Saving
         save_text(f"  {RULES}\n\n")
-        check(app._ai_instructions() == RULES, "Save stores the instructions, trimmed")
+        check(app._ai_instructions == RULES, "Save stores the instructions, trimmed")
         check(app.ai_instructions_btn.cget("text") == "Instructions ✓", "the button shows they're on")
         check("Instructions saved. Your next question starts a new conversation." in transcript(), "it warns about the new conversation")
         check(transcript().count("You\n") == 1, "saving doesn't clear what's on screen")
@@ -219,26 +229,106 @@ def scenario():
         check(any("too long" in t for t in label_texts(dlg)), "over the limit shows too long")
         button(dlg, "Save").invoke()
         root.update()
-        check(dlg.winfo_exists() and app._ai_instructions() == RULES, "over the limit saves nothing and stays open")
+        check(dlg.winfo_exists() and app._ai_instructions == RULES, "over the limit saves nothing and stays open")
         box.delete("1.0", "end")
         box.insert("1.0", "x" * ai.MAX_INSTRUCTIONS)
         button(dlg, "Save").invoke()
         root.update()
-        check(not dlg.winfo_exists() and len(app._ai_instructions()) == ai.MAX_INSTRUCTIONS, "exactly at the limit saves")
+        check(not dlg.winfo_exists() and len(app._ai_instructions) == ai.MAX_INSTRUCTIONS, "exactly at the limit saves")
 
         # Clearing removes them, as a new conversation
         dlg = open_dialog()
         button(dlg, "Clear").invoke()
         button(dlg, "Save").invoke()
         root.update()
-        check(app._ai_instructions() == "" and app.ai_instructions_btn.cget("text") == "Instructions…", "Clear then Save turns them off")
+        check(app._ai_instructions == "" and app.ai_instructions_btn.cget("text") == "Instructions…", "Clear then Save turns them off")
         body = ask("fifth")
         check(body["system"] == ai.SYSTEM_PROMPT and len(body["messages"]) == 1, "the AI goes back to the normal prompt")
 
-        # A bad value in the settings file can't break Ask AI
-        settings.save({"ai_instructions": 123})
-        check(app._ai_instructions() == "", "a hand-edited setting that isn't text is ignored")
-        settings.save({"ai_instructions": ""})
+        # What's in the settings file at launch
+        check(gui.saved_ai_instructions({}) == "", "no setting, no instructions")
+        check(gui.saved_ai_instructions({"ai_instructions": f"  {RULES} "}) == RULES, "a saved setting loads, trimmed")
+        check(gui.saved_ai_instructions({"ai_instructions": 123}) == "", "a hand-edited setting that isn't text is ignored")
+        over = gui.saved_ai_instructions({"ai_instructions": "x" * 200_000})
+        check(len(over) == ai.MAX_INSTRUCTIONS, f"a hand-edited setting can't pass the limit: {len(over)}")
+
+        # An unreadable settings file can't drop them or the conversation
+        save_text(RULES)
+        before = ask("before the file went bad")
+        real_load = settings.load
+        settings.load = lambda: {}
+        after = ask("while the file is bad")
+        settings.load = real_load
+        check(after["system"].endswith(RULES), "a bad read keeps the instructions")
+        check(len(after["messages"]) == len(before["messages"]) + 2, "and the conversation")
+
+        # The note only promises a new conversation when there will be one
+        app._ai_new_chat()
+        save_text("")
+        ask("plain")
+        save_text(RULES)
+        check(transcript().rstrip().endswith("Instructions saved. Your next question starts a new conversation."), "the first change warns")
+        save_text("")
+        check(transcript().rstrip().endswith("Instructions cleared."), "changing back to what the chat already uses doesn't")
+        kept = ask("still the same chat")
+        check(len(kept["messages"]) == 3 and "Now using" not in transcript(), "and the conversation carries on")
+
+        # No changing them while an answer is running
+        F.SCRIPTS["anthropic"] = [anthropic_reply()]
+        check(str(app.ai_instructions_btn["state"]) == "normal", "the button works between questions")
+        app._ai_send("running")
+        check(str(app.ai_instructions_btn["state"]) == "disabled", "and is off while an answer runs")
+        settle(lambda: app._ai_cancel is None)
+        check(str(app.ai_instructions_btn["state"]) == "normal", "and comes back afterwards")
+
+        # A failed save says so and changes nothing
+        real_save = settings.save
+
+        def full_disk(values):
+            raise OSError("disk full")
+
+        dlg = open_dialog()
+        text_box(dlg).insert("1.0", "new text")
+        settings.save = full_disk
+        button(dlg, "Save").invoke()
+        settings.save = real_save
+        root.update()
+        check(dlg.winfo_exists() and any("Couldn't save" in t for t in label_vars(dlg)), f"a failed save says so and stays open: {label_vars(dlg)}")
+        check(app._ai_instructions == "", "and changes nothing")
+        check("Instructions saved" not in transcript().rstrip().rsplit("\n", 1)[-1], "and doesn't claim it saved")
+
+        # Leaving with unsaved changes asks first, Cancel doesn't
+        asked = []
+        answer = [False]
+
+        def fake_ask(title, message, **kw):
+            asked.append(title)
+            return answer[0]
+
+        gui.messagebox.askyesno = fake_ask
+        dlg.focus_force()
+        root.update()
+        dlg.event_generate("<Escape>")
+        root.update()
+        check(len(asked) == 1 and dlg.winfo_exists(), f"Escape with unsaved text asks, and No stays: {asked}")
+        dlg.tk.call(dlg.protocol("WM_DELETE_WINDOW"))
+        root.update()
+        check(len(asked) == 2 and dlg.winfo_exists(), "the window's close button asks too")
+        answer[0] = True
+        dlg.event_generate("<Escape>")
+        root.update()
+        check(len(asked) == 3 and not dlg.winfo_exists() and app._ai_instructions == "", "Yes closes without saving")
+        dlg = open_dialog()
+        dlg.focus_force()
+        root.update()
+        dlg.event_generate("<Escape>")
+        root.update()
+        check(len(asked) == 3 and not dlg.winfo_exists(), "nothing changed: Escape just closes")
+        dlg = open_dialog()
+        text_box(dlg).insert("1.0", "typed then cancelled")
+        button(dlg, "Cancel").invoke()
+        root.update()
+        check(len(asked) == 3 and not dlg.winfo_exists(), "Cancel means it, so it doesn't ask")
 
         # Changing the model still says the model
         save_text(RULES)
@@ -251,17 +341,29 @@ def scenario():
         root.geometry("900x560")
         settle(lambda: False, 0.3)
         btn = app.ai_instructions_btn
+        app.ai_status.set("No credential store is available, so the key will only be kept until you close the app.")
+        settle(lambda: False, 0.2)
         check(btn.winfo_width() >= btn.winfo_reqwidth() - 1
               and btn.winfo_rootx() + btn.winfo_width() <= root.winfo_rootx() + root.winfo_width(),
-              "the button fits at the smallest window")
+              "the button fits at the smallest window, even with a long status")
+        app.ai_status.set("")
         check(app.ai_model_combo.winfo_width() >= 140, f"and leaves room for the model: {app.ai_model_combo.winfo_width()}")
 
         # Help keeps up with the app
         helptext = " ".join(body for _title, body in gui.HELP_SECTIONS)
-        for phrase in ("Instructions…", "Add an example", "Worth knowing", "Set target", "target prices",
+        for phrase in ("Instructions…", "Add an example", "Worth knowing", "Set target", "target prices", "Below 1h average",
                        f"{ai.MAX_INSTRUCTIONS:,} characters", "your instructions", "Open data folder"):
             check(phrase in helptext, f"Help mentions {phrase}")
-        check("three tools" not in helptext and "with market check" not in helptext, "the old Help wording is gone")
+        for old in ("three tools", "with market check", "may rebound", "may fall", "Signal —"):
+            check(old not in helptext, f"Help no longer says {old}")
+
+        # The rest of the app's text agrees
+        check("signal" not in app.placeholder_label.cget("text").lower(), "the Search tab doesn't promise a signal")
+        check(app.flip_tree.heading("signal", "text").startswith("Note"), "FlipRec's column is called Note")
+        check(analyzer.reversion_signal(90, 100)[0] == "Below 1h average", "below the average is stated as a fact")
+        check(analyzer.reversion_signal(110, 100)[0] == "Above 1h average", "above the average too")
+        check(analyzer.reversion_signal(150, 100)[0] == "Extreme move - caution", "an extreme move still warns")
+        check(analyzer.reversion_signal(100, 100)[0] == "", "a normal price says nothing")
         check(gui.AI_INSTRUCTIONS_EXAMPLE.split("\n")[0] in helptext, "Help shows the same example as the dialog")
     except Exception:
         traceback.print_exc()

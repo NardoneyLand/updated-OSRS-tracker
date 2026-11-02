@@ -10,7 +10,7 @@ Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** �
 
 ## Features
 
-- **FlipRec** — every item you can buy and resell at a profit after the 2% GE tax, priced like an in-game margin check. Capital-aware quantity and profit estimates, buy limits, volume, last-trade age, Profitable / Marginal / Suspect / Inactive verdicts, and a dip/spike signal.
+- **FlipRec** — every item you can buy and resell at a profit after the 2% GE tax, priced like an in-game margin check. Capital-aware quantity and profit estimates, buy limits, volume, last-trade age, Profitable / Marginal / Suspect / Inactive verdicts, and a note on how far the price is from its 1-hour average.
 - **Profit alerts** — checks the market every 1, 5, 15 or 30 minutes (1 by default) and alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and taskbar flash. Alerts keep updating with live prices and disappear once the flip stops qualifying.
 - **Watchlist** — add items from Search, follow their live margins, and set target prices to be alerted when an item's Buy price falls to one or its Sell price rises to one.
 - **Volatile scanner** — the biggest movers across the whole GE over 5m / 1h / 6h / 24h.

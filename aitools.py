@@ -161,7 +161,7 @@ def _flip_summary(row: dict) -> dict:
         "total_cost": row["cost"], "est_profit": row["profit"],
         "hourly_volume_slower_side": row["volume"],
         "last_trade_age_seconds": row["age"], "verdict": row["verdict"],
-        "signal": row["reversion"], "pct_vs_1h_avg": row["reversion_pct"],
+        "price_vs_1h_avg": row["reversion"], "pct_vs_1h_avg": row["reversion_pct"],
         "margin_at_5m_avg_prices": row["net_5m"],
         "margin_backed_by_5m_avg": row["backed_5m"],
     }
