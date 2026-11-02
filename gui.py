@@ -184,6 +184,8 @@ def saved_ai_instructions(prefs: dict) -> str:
 TRADED_WITHIN = {"Any time": None, "1 min": 60, "2 min": 120, "3 min": 180,
                  "5 min": 300, "10 min": 600, "15 min": 900, "30 min": 1800,
                  "1 hour": 3600}
+# FlipRec's "Min Vol 1h" choices, in units traded.
+MIN_VOLUME_1H = {"Any": 0, **{f"{n:,}": n for n in range(1000, 10001, 1000)}}
 
 
 def fmt_target(target, hit, fmt) -> str:
@@ -363,10 +365,11 @@ HELP_SECTIONS = [
      "    •  Add to Watchlist, or Remove from Watchlist.\n"
      "    •  Ignore item — adds it to the Ignored List tab, or Remove from "
      "Ignored List.\n"
-     "    •  Open in Search.\n\n"
+     "    •  Open in Search.\n"
+     "    •  Open on OSRS Wiki — the item's Wiki page, in your browser.\n\n"
      "If you've selected several rows and right-click one of them, the "
-     "Watchlist and Ignore options apply to all of them. Open in Search opens "
-     "the row you clicked."),
+     "Watchlist and Ignore options apply to all of them. Open in Search and "
+     "Open on OSRS Wiki open the row you clicked."),
 
     ("FlipRec — flip recommendations",
      "FlipRec lists every item you could buy and immediately resell at a "
@@ -380,6 +383,10 @@ HELP_SECTIONS = [
      "    •  Traded within — hides items where a side hasn't traded in that "
      "long, going by the same age as Last trade. It applies to every Show "
      "choice except Inactive, and goes by the time of the last market check.\n"
+     "    •  Min Vol 1h — hides items under that Vol 1h, from 1,000 to 10,000. "
+     "It goes by the same number as the Vol 1h column, the slower side, and "
+     "applies to every Show choice except Inactive. It only changes this list, "
+     "not which flips alert you.\n"
      "    •  Show — Alerts, which it opens on (see Alerts below), All "
      "verdicts for every flip, or one verdict such as Profitable.\n"
      "    •  Alert when est. profit ≥ — your alert threshold.\n\n"
@@ -546,12 +553,17 @@ HELP_SECTIONS = [
      "higher or lower than in the earlier half.\n"
      "    •  Volume table — units traded in the last 1, 12 and 24 hours, split "
      "into instant buys and instant sells.\n"
+     "    •  Alch — the coins High and Low Alchemy give for one item, before "
+     "the cost of the nature rune or what you paid for the item. A dash means "
+     "the Wiki doesn't list a value.\n"
      "    •  Worth knowing — notes when something needs care, such as an extreme "
      "price swing or quiet trading.\n\n"
-     "All of this updates with every market check while the result is open. "
-     "The chart doesn't, because you may be zoomed in on it.\n\n"
+     "All of this updates with every market check while the result is open, "
+     "apart from Alch, which doesn't follow the market. The chart doesn't "
+     "either, because you may be zoomed in on it.\n\n"
      "Click ☆ Add to Watchlist to follow the item on the Watchlist tab, or "
-     "Ignore item to hide it from FlipRec and Volatile.\n\n"
+     "Ignore item to hide it from FlipRec and Volatile. OSRS Wiki opens the "
+     "item's Wiki page in your browser.\n\n"
      "Below the result is the item's price chart (high, low and mid). "
      "Choose a range: 1H, 12H, 1D, 1W, 1M, 1Y or All. The history comes "
      "from the OSRS Wiki, so the chart is filled in even the first time "
@@ -719,6 +731,8 @@ FOOTNOTE_WIDTH = 1000         # the longest line under a table, in pixels
 STATUS_ROOM = 200             # room for "Prices updated 12:00:00"
 CAPITAL_ERROR = "Capital must look like 5m, 250k or 1,000,000."
 SEARCH_FACTS_GAP = 30         # seconds; coming back to Search needn't re-download
+# Finds the page by item ID, so it also lands on the right variant of a potion.
+WIKI_ITEM_PAGE = "https://oldschool.runescape.wiki/w/Special:Lookup?type=item&id={}"
 COLUMN_DRAG_START = 8         # pixels a header moves before it's a drag, not a click
 COLUMN_DRAG_EDGE = 30         # dragging this close to the side scrolls the table
 
@@ -1722,13 +1736,17 @@ class OSRSTrackerApp:
         # Header
         header = ttk.Frame(self.result_frame, style="Inner.TFrame")
         header.pack(fill="x", padx=16, pady=(12, 6))
-        ttk.Label(header, text=name, style="Item.TLabel").pack(side="left")
+        title = ttk.Label(header, text=name, style="Item.TLabel")
 
         self._search_item = item
         self.watch_btn = ttk.Button(header, command=self._toggle_watch)
         self.watch_btn.pack(side="right")
         self.ignore_btn = ttk.Button(header, command=self._toggle_ignore)
         self.ignore_btn.pack(side="right", padx=(0, 8))
+        self.wiki_btn = ttk.Button(header, text="OSRS Wiki",
+                                   command=lambda: self._open_wiki(item["id"]))
+        self.wiki_btn.pack(side="right", padx=(0, 8))
+        title.pack(side="left")     # after the buttons, so it can't squeeze them
         self._update_watch_btn()
 
         # Stats grid
@@ -1758,10 +1776,16 @@ class OSRSTrackerApp:
             wraplength=max(200, e.width - 110)))
         self._show_search_prices()
 
-        volume_frame = ttk.Frame(right, style="Inner.TFrame")
-        volume_frame.pack(anchor="w", pady=(0, 10))
+        # Beside each other, which takes no height from the chart, unless a
+        # narrow window means Alch would be cut off.
+        volume_row = ttk.Frame(right, style="Inner.TFrame")
+        volume_row.pack(anchor="w", fill="x", pady=(0, 10))
+        volume_frame = ttk.Frame(volume_row, style="Inner.TFrame")
+        alch_frame = ttk.Frame(volume_row, style="Inner.TFrame")
+        self._wrap_toolbar(volume_row, volume_frame, alch_frame)
         self._search_volume = (volume_frame, item["id"], {})
         self._render_search_volume()
+        self._add_search_alch(alch_frame, item)
 
         # Notes
         reasons_frame = ttk.Frame(right, style="Inner.TFrame")
@@ -1774,6 +1798,22 @@ class OSRSTrackerApp:
         self._search_notes = (reasons_frame, notes)
         self._search_facts_at = time.time()
         self._show_search_facts()
+
+    def _add_search_alch(self, frame, item):
+        """These don't follow the market, and a new Prices setting redraws the
+        whole panel, so they're only filled in here."""
+        fmt = self._search_price_fmt()
+        ttk.Label(frame, text="Alch", style="PanelHeader.TLabel"
+                  ).grid(row=0, column=0, sticky="w")
+        for row, (label, key) in enumerate((("High", "highalch"),
+                                            ("Low", "lowalch")), start=1):
+            ttk.Label(frame, text=label, style="Stat.TLabel"
+                      ).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=1)
+            alch = item.get(key)       # the Wiki leaves it out for some items
+            value = tk.Label(frame, bg=COLOR_PANEL, fg=COLOR_TEXT, font=FONT_VALUE,
+                             text="-" if alch is None else f"{fmt(alch)} gp")
+            value.grid(row=row, column=1, sticky="w", pady=1)
+            self._search_stats[f"{label} alch"] = value
 
     def _render_search_volume(self):
         """The units-traded table on the Search panel. Widgets are reused:
@@ -1796,9 +1836,13 @@ class OSRSTrackerApp:
                                                     font=FONT_VALUE)
                     cells[side, seconds].grid(row=side + 1, column=col,
                                               sticky="e", padx=(16, 0), pady=1)
-            cells["note"] = ttk.Label(frame, style="Panel.TLabel", wraplength=420,
-                                      justify="left", foreground=COLOR_DIM)
-            cells["note"].grid(row=3, column=0, columnspan=4, sticky="w")
+            # The gap before Alch, which goes unseen if Alch moves below.
+            frame.columnconfigure(len(volume.WINDOWS) + 1, minsize=32)
+            # Under the row, so its width can't push Alch out of it.
+            cells["note"] = ttk.Label(frame.master, style="Panel.TLabel",
+                                      wraplength=420, justify="left",
+                                      foreground=COLOR_DIM)
+            cells["note"].grid(row=2, column=0, columnspan=2, sticky="w")
         for key, cell in cells.items():
             if key != "note":
                 side, seconds = key
@@ -2693,7 +2737,12 @@ class OSRSTrackerApp:
         item_id = id_map[clicked]
         menu.add_command(label="Open in Search",
                          command=lambda: self._open_in_search(item_id))
+        menu.add_command(label="Open on OSRS Wiki",
+                         command=lambda: self._open_wiki(item_id))
         return menu
+
+    def _open_wiki(self, item_id):
+        webbrowser.open(WIKI_ITEM_PAGE.format(item_id))
 
     def _add_to_watchlist(self, items: list):
         for item_id, name in items:
@@ -2742,12 +2791,13 @@ class OSRSTrackerApp:
         right.grid(row=0, column=1, sticky="nw")
         bar.columnconfigure(1, weight=1)
 
-        def place(event):
+        def place(_event):
+            width = bar.winfo_width()
             buttons = right.winfo_reqwidth()
             if status:
                 buttons -= status.winfo_reqwidth()
             needed = buttons + (STATUS_ROOM if status else 0)
-            one_row = event.width >= left.winfo_reqwidth() + needed
+            one_row = width >= left.winfo_reqwidth() + needed
             if one_row:
                 right.grid(row=0, column=1, columnspan=1, sticky="nw", pady=0)
             else:
@@ -2756,8 +2806,9 @@ class OSRSTrackerApp:
             if status:
                 used = left.winfo_reqwidth() if one_row else 0
                 status.configure(
-                    wraplength=max(100, event.width - used - buttons))
+                    wraplength=max(100, width - used - buttons))
         bar.bind("<Configure>", place)
+        left.bind("<Configure>", place)    # its contents can widen too
 
     def _pack_table(self, frame, tree, bottom=10):
         """Fill a tab with a table. Columns keep their full width, with a
@@ -3042,12 +3093,15 @@ class OSRSTrackerApp:
 
         bar = ttk.Frame(frame)
         bar.pack(fill="x", padx=20, pady=(20, 6))
+        controls = ttk.Frame(bar)
+        limits = ttk.Frame(bar)
+        self._wrap_toolbar(bar, controls, limits)
 
-        ttk.Label(bar, text="Alert when est. profit ≥", style="TLabel"
+        ttk.Label(controls, text="Alert when est. profit ≥", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         saved = prefs.get("alert_threshold", ALERT_DEFAULT_THRESHOLD)
         self.alert_threshold_var = tk.StringVar(value=f"{int(saved):,}")
-        spin = ttk.Spinbox(bar, textvariable=self.alert_threshold_var,
+        spin = ttk.Spinbox(controls, textvariable=self.alert_threshold_var,
                            values=ALERT_THRESHOLD_STEPS, state="readonly",
                            width=13, wrap=False)
         spin.pack(side="left", padx=(0, 4))
@@ -3059,9 +3113,10 @@ class OSRSTrackerApp:
         self._threshold_job = None
         self.alert_threshold_var.trace_add(
             "write", lambda *_: self._schedule_threshold_change())
-        ttk.Label(bar, text="gp", style="TLabel").pack(side="left", padx=(0, 16))
+        ttk.Label(controls, text="gp", style="TLabel"
+                  ).pack(side="left", padx=(0, 16))
 
-        ttk.Label(bar, text="Show:", style="TLabel"
+        ttk.Label(controls, text="Show:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         # Its own setting, so going back to v1.4 still finds its old one.
         shows = ["Alerts", "All verdicts", "Profitable", "Marginal", "Unsteady",
@@ -3070,7 +3125,7 @@ class OSRSTrackerApp:
         self.flip_show_var = tk.StringVar(
             value=show if show in shows else "Alerts")
         show_combo = ttk.Combobox(
-            bar, textvariable=self.flip_show_var, state="readonly",
+            controls, textvariable=self.flip_show_var, state="readonly",
             width=12, values=shows)
         show_combo.pack(side="left", padx=(0, 16))
         show_combo.bind("<<ComboboxSelected>>",
@@ -3078,21 +3133,33 @@ class OSRSTrackerApp:
 
         self.flip_hide_inactive_var = tk.BooleanVar(
             value=prefs.get("flip_hide_inactive", True))
-        ttk.Checkbutton(bar, text="Hide inactive",
+        ttk.Checkbutton(controls, text="Hide inactive",
                         variable=self.flip_hide_inactive_var,
                         command=self._apply_flip_filters
                         ).pack(side="left", padx=(0, 16))
 
-        ttk.Label(bar, text="Traded within:", style="TLabel"
+        ttk.Label(limits, text="Traded within:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         traded = prefs.get("flip_traded_within")
         self.flip_traded_var = tk.StringVar(
             value=traded if traded in TRADED_WITHIN else "Any time")
         traded_combo = ttk.Combobox(
-            bar, textvariable=self.flip_traded_var, state="readonly",
+            limits, textvariable=self.flip_traded_var, state="readonly",
             width=8, values=list(TRADED_WITHIN))
-        traded_combo.pack(side="left")
+        traded_combo.pack(side="left", padx=(0, 16))
         traded_combo.bind("<<ComboboxSelected>>",
+                          lambda _e: self._apply_flip_filters())
+
+        ttk.Label(limits, text="Min Vol 1h:", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        min_volume = prefs.get("flip_min_volume")
+        self.flip_min_volume_var = tk.StringVar(
+            value=min_volume if min_volume in MIN_VOLUME_1H else "Any")
+        volume_combo = ttk.Combobox(
+            limits, textvariable=self.flip_min_volume_var, state="readonly",
+            width=7, height=len(MIN_VOLUME_1H), values=list(MIN_VOLUME_1H))
+        volume_combo.pack(side="left")
+        volume_combo.bind("<<ComboboxSelected>>",
                           lambda _e: self._apply_flip_filters())
 
         # Banner for items that are not actively trading
@@ -3159,6 +3226,7 @@ class OSRSTrackerApp:
             "flip_price_format": self.flip_format_var.get(),
             "flip_show": self.flip_show_var.get(),
             "flip_traded_within": self.flip_traded_var.get(),
+            "flip_min_volume": self.flip_min_volume_var.get(),
         })
         self._show_market_note()
         if not self._market:
@@ -3252,11 +3320,19 @@ class OSRSTrackerApp:
             recent = [r for r in rows if r["traded_at"] >= cutoff]
             not_recent = len(rows) - len(recent)
             rows = recent
+        # Inactive items have a side with no trades, so this can't apply either.
+        min_volume = self.flip_min_volume_var.get()
+        at_least = MIN_VOLUME_1H.get(min_volume) if show != "Inactive" else None
+        too_quiet = 0
+        if at_least:
+            busy = [r for r in rows if r["volume"] >= at_least]
+            too_quiet = len(rows) - len(busy)
+            rows = busy
         rows = rows[:FLIP_MAX_ROWS]
 
         banner = []
         # Above the table rather than in it, where only the Item column shows.
-        if not rows and not not_recent:
+        if not rows and not not_recent and not too_quiet:
             banner.append(
                 f"No flips at or above {fmt_gp(self._alert_threshold())} gp "
                 f"est. profit right now." if show == "Alerts"
@@ -3274,6 +3350,10 @@ class OSRSTrackerApp:
             banner.append(
                 f"⏱ {not_recent} item(s) hidden: a side hasn't traded within "
                 f"{traded}. Set Traded within to Any time to see them.")
+        if too_quiet:
+            banner.append(
+                f"{too_quiet} item(s) hidden: Vol 1h is under {min_volume}. Set "
+                f"Min Vol 1h to Any to see them.")
         if any(r["margin_unknown"] for r in rows):
             banner.append(
                 "⚠ Recent 5-minute prices aren't ready, so Unsteady flips can't "

@@ -3,6 +3,19 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.3 — 2026-11-02
+
+**New**
+- Search shows an item's High and Low Alch values.
+- An OSRS Wiki button on Search, and Open on OSRS Wiki when you right-click a row on
+  FlipRec, Watchlist, Ignored List or Volatile, open the item's Wiki page in your browser.
+- A Min Vol 1h dropdown on FlipRec hides items under the Vol 1h you choose, from 1,000
+  to 10,000. It only changes the list, not which flips alert you.
+
+**Changed**
+- In a narrow window, FlipRec's Traded within and Min Vol 1h move to a second row of
+  filters so they all fit.
+
 ## 1.6.2 — 2026-11-02
 
 **New**

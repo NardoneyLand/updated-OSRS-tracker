@@ -22,13 +22,14 @@ def check(cond, what):
 
 NOW = time.time()
 MAPPING = [{"id": 1, "name": "Abyssal whip", "limit": 70, "members": True},
-           {"id": 2, "name": "Voidwaker", "limit": 8, "members": True}]
+           {"id": 2, "name": "Voidwaker", "limit": 8, "members": True, "highalch": 1_200_000, "lowalch": 800_000}]
 LATEST = {"1": {"high": 2_000_000, "low": 1_900_000, "highTime": NOW - 20, "lowTime": NOW - 30},
           "2": {"high": 34_148_500, "low": 33_125_702, "highTime": NOW - 20, "lowTime": NOW - 30}}
 HOUR = {key: {"highPriceVolume": 500, "lowPriceVolume": 500, "avgHighPrice": v["high"], "avgLowPrice": v["low"]}
         for key, v in LATEST.items()}
 api.get_mapping = lambda: MAPPING
 api.get_all_latest_prices = lambda: LATEST
+api.get_latest_price = lambda item_id: LATEST[str(item_id)]
 api.get_bulk_average = lambda step="1h": HOUR
 api.get_bulk_bucket = lambda step, start: {}
 api.get_timeseries = lambda item_id, timestep="1h": []
@@ -148,6 +149,35 @@ def scenario():
         check(label.winfo_ismapped() and label.winfo_width() >= label.winfo_reqwidth(),
               f"FlipRec at 900: the status shows beside it: {label.winfo_width()}")
         check(right_edge(bar.winfo_children()[0], bar) <= bar.winfo_width(), "FlipRec at 900: the filters all fit")
+        limits_bar = app.fliprec_tab.winfo_children()[0]
+        combos = [w for group in limits_bar.winfo_children() for w in group.winfo_children() if w.winfo_class() == "TCombobox"]
+        check(len(combos) == 3 and all(right_edge(w, limits_bar) <= limits_bar.winfo_width() for w in combos), f"FlipRec at 900: Show, Traded within and Min Vol 1h all fit: {[right_edge(w, limits_bar) for w in combos]} of {limits_bar.winfo_width()}")
+
+        # Search: Alch moves under the Volume table rather than being cut off
+        app.notebook.select(app.search_tab)
+        app._lookup_item(MAPPING[1])
+        settle(lambda: "High alch" in app._search_stats, 3)
+        settle()
+        panel = app.result_frame
+        alch = app._search_stats["High alch"]
+        check(alch.cget("text") == "1,200,000 gp" and right_edge(alch, panel) <= panel.winfo_width(),
+              f"Search at 900: the widest alch value fits: {right_edge(alch, panel)} of {panel.winfo_width()}")
+        real_sides, real_partial = app._volume.sides, app._volume.is_partial
+        app._volume.sides = lambda item_id, seconds: (123_456, 123_456)
+        app._volume.is_partial = lambda seconds: True
+        app._render_search_volume()    # as when volume history finishes loading
+        settle()
+        check(alch.master.grid_info()["row"] == 1 and right_edge(alch, panel) <= panel.winfo_width(),
+              f"Search at 900: wide volumes move it to its own row: row {alch.master.grid_info()['row']}, {right_edge(alch, panel)} of {panel.winfo_width()}")
+        app._volume.sides, app._volume.is_partial = real_sides, real_partial
+        app._render_search_volume()
+        app._lookup_item(MAPPING[0])
+        settle(lambda: app._search_shown and app._search_shown["item"]["id"] == 1, 3)
+        settle()
+        alch = app._search_stats["High alch"]
+        check(alch.cget("text") == "-" and alch.master.grid_info()["row"] == 0, f"Search at 900: otherwise it sits beside Volume: {alch.master.grid_info()['row']}")
+        app.notebook.select(app.fliprec_tab)
+        settle()
 
         # A long status wraps instead of being cut off
         long_status = "Error: " + "the server said no " * 12

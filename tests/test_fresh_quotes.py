@@ -386,6 +386,40 @@ def scenario():
         app._apply_flip_filters()
         settle(lambda: False, 0.1)
 
+        # Min Vol 1h
+        check(app.flip_min_volume_var.get() == "Any", "Min Vol 1h starts at Any")
+        choices = list(gui.MIN_VOLUME_1H)
+        check(choices[:3] == ["Any", "1,000", "2,000"] and choices[-1] == "10,000" and gui.MIN_VOLUME_1H["10,000"] == 10000, f"it goes up in thousands: {choices}")
+        for row in app.flip_results:
+            row["volume"] = {"Steady item": 5000, "Shaky item": 1000, "Low item": 999}.get(row["name"], 0)
+        app._render_fliprec_table()
+        everything = listed()
+        check({"Steady item", "Shaky item", "Low item"} <= everything and "Vol 1h is under" not in app.flip_banner.get(), f"Any hides nothing: {everything}")
+        for label, expected in (("1,000", {"Steady item", "Shaky item"}), ("5,000", {"Steady item"}), ("6,000", set())):
+            app.flip_min_volume_var.set(label)
+            app._render_fliprec_table()
+            check(listed() == expected, f"{label} keeps {expected}: {listed()}")
+        check("No profitable flips" not in app.flip_banner.get() and "Vol 1h is under 6,000" in app.flip_banner.get(), f"an empty list says why: {app.flip_banner.get()}")
+        app.flip_min_volume_var.set("1,000")
+        app._render_fliprec_table()
+        check(f"{len(everything) - 2} item(s) hidden: Vol 1h is under 1,000" in app.flip_banner.get(), f"the banner counts them: {app.flip_banner.get()}")
+        for row in app.flip_results:
+            row["traded_at"] = time.time() - {"Steady item": 50, "Shaky item": 5000}.get(row["name"], 50)
+        app.flip_traded_var.set("1 min")
+        app._render_fliprec_table()
+        check(listed() == {"Steady item"} and "1 item(s) hidden: a side" in app.flip_banner.get(), f"it works with Traded within, with no item counted twice: {app.flip_banner.get()}")
+        app.flip_traded_var.set("Any time")
+        app.flip_show_var.set("Inactive")
+        app._render_fliprec_table()
+        check("Vol 1h is under" not in app.flip_banner.get(), "it doesn't apply when asking for Inactive")
+        app.flip_show_var.set("All verdicts")
+        app.flip_min_volume_var.set("2,000")
+        app._apply_flip_filters()
+        check(settings.load()["flip_min_volume"] == "2,000", "the choice is saved")
+        app.flip_min_volume_var.set("Any")
+        app._apply_flip_filters()
+        settle(lambda: False, 0.1)
+
         # A banner when the margin can't be checked
         real_recent = app._volume.recent_prices
         app._volume.recent_prices = lambda item_id: None

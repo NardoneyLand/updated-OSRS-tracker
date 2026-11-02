@@ -161,13 +161,13 @@ def scenario():
         # The right-click menu
         tree, id_map = app.flip_tree, app.flip_id_map
         menu = right_click(tree, iid_of(tree, id_map, 10))
-        check(labels(menu) == ["Add to Watchlist", "Ignore item", "Open in Search"], f"menu: {labels(menu)}")
+        check(labels(menu) == ["Add to Watchlist", "Ignore item", "Open in Search", "Open on OSRS Wiki"], f"menu: {labels(menu)}")
         check([id_map[i] for i in tree.selection()] == [10], "right-clicking selects the row")
         first, second = iid_of(tree, id_map, 11), iid_of(tree, id_map, 12)
         tree.selection_set(first, second)
         menu = right_click(tree, second)
         check(len(tree.selection()) == 2, "right-clicking inside a selection keeps it")
-        check(labels(menu) == ["Add 2 items to Watchlist", "Ignore 2 items", "Open in Search"], f"several rows: {labels(menu)}")
+        check(labels(menu) == ["Add 2 items to Watchlist", "Ignore 2 items", "Open in Search", "Open on OSRS Wiki"], f"several rows: {labels(menu)}")
         menu = right_click(tree, iid_of(tree, id_map, 13))
         check(len(tree.selection()) == 1, "right-clicking outside a selection replaces it")
         menus.clear()
@@ -272,6 +272,13 @@ def scenario():
         choose(menu, "Open in Search")
         settle(lambda: app._search_item and app._search_item["id"] == 70, 3)
         check(app._search_item["id"] == 70 and app.search_var.get() == "Item 070", "Open in Search opens the item")
+
+        # Open on OSRS Wiki
+        opened = []
+        real_open, gui.webbrowser.open = gui.webbrowser.open, opened.append
+        choose(menu, "Open on OSRS Wiki")
+        gui.webbrowser.open = real_open
+        check(opened == [gui.WIKI_ITEM_PAGE.format(70)], f"Open on OSRS Wiki opens the row you clicked: {opened}")
         check(app.notebook.select() == str(app.search_tab), "and shows the Search tab")
         settle()
 
@@ -360,7 +367,7 @@ def scenario():
         check(ignored_names() == ["Item 120", "Item 011", "Item 006"], "and reverses")
         tree, id_map = app.ignored_tree, app.ignored_id_map
         menu = right_click(tree, iid_of(tree, id_map, 6))
-        check(labels(menu) == ["Add to Watchlist", "Remove from Ignored List", "Open in Search"], f"its menu: {labels(menu)}")
+        check(labels(menu) == ["Add to Watchlist", "Remove from Ignored List", "Open in Search", "Open on OSRS Wiki"], f"its menu: {labels(menu)}")
         choose(menu, "Add to Watchlist")
         check(6 in app._ignored and gui.IGNORED_TAG + "Item 006" in watch_names() and "Item 006" in ignored_names(), "adding to the Watchlist keeps it on this list too")
         menu = right_click(tree, iid_of(tree, id_map, 11))

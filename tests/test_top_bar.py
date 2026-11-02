@@ -22,7 +22,7 @@ def check(cond, what):
 
 
 NOW = time.time()
-MAPPING = [{"id": 1, "name": "Abyssal whip", "limit": 70, "members": True},
+MAPPING = [{"id": 1, "name": "Abyssal whip", "limit": 70, "members": True, "highalch": 72000, "lowalch": 48000},
            {"id": 2, "name": "Lobster", "limit": 6000, "members": False},
            {"id": 3, "name": "Coal", "limit": 13000, "members": False}]
 
@@ -185,6 +185,12 @@ def scenario():
         labels = list(app._search_stats)
         check(labels[:8] == ["Buy", "Sell", "Qty", "ROI", "Upfront", "Est. profit", "Vol 1h", "Last trade"], f"Search uses the shared order: {labels[:8]}")
         check("High buy" not in labels and "Low sell" not in labels, "the old names are gone")
+        check(search_stat("High alch") == "72,000 gp" and search_stat("Low alch") == "48,000 gp", f"Search alch values: {search_stat('High alch')}, {search_stat('Low alch')}")
+        opened = []
+        real_open, gui.webbrowser.open = gui.webbrowser.open, opened.append
+        app.wiki_btn.invoke()
+        gui.webbrowser.open = real_open
+        check(opened == ["https://oldschool.runescape.wiki/w/Special:Lookup?type=item&id=1"], f"OSRS Wiki opens the item's page: {opened}")
         exact = lambda column: tables["FlipRec"][column]
         check(search_stat("Qty") == "70" and search_stat("Vol 1h").startswith("400"), f"Search Qty and Vol 1h: {search_stat('Qty')}, {search_stat('Vol 1h')}")
         check(search_stat("Upfront") == f"{1_850_000 * 70:,}", f"Search Upfront: {search_stat('Upfront')}")
@@ -197,6 +203,7 @@ def scenario():
         app._on_search_format_changed()
         root.update()
         check(search_stat("Buy") == "1.80M gp", f"Search keeps its own Prices setting: {search_stat('Buy')}")
+        check(search_stat("High alch") == gui.fmt_gp(72000) + " gp" and search_stat("Low alch") == gui.fmt_gp(48000) + " gp", f"the alch values follow it: {search_stat('High alch')}")
         check(flips()[1]["buy"] == gui.fmt_gp(1_800_000), "and the tables aren't affected")
         refresh()
         check(search_stat("Buy") == "1.80M gp", "and it survives a refresh")
@@ -428,6 +435,12 @@ def scenario():
         FACTS["pct"] = 3.0
         app._lookup_item(MAPPING[1])
         settle(lambda: app._search_shown is not None and app._search_shown["item"]["id"] == 2, 3)
+        check(search_stat("High alch") == "-" and search_stat("Low alch") == "-", "an item the Wiki gives no alch value shows a dash")
+        opened = []
+        real_open, gui.webbrowser.open = gui.webbrowser.open, opened.append
+        app.wiki_btn.invoke()
+        gui.webbrowser.open = real_open
+        check(opened == [gui.WIKI_ITEM_PAGE.format(2)], f"the link follows the search: {opened}")
         FACTS["pct"] = 7.0
         gate.set()
         settle(lambda: not app._search_facts_busy, 3)
