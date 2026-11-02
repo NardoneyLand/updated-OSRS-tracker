@@ -3,6 +3,26 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.5 — 2026-11-01
+
+**Fixed**
+- A new custom AI URL that can't be saved no longer lets its key be stored, which
+  would have sent the key to the old URL. The window says so and stays open.
+- Changes that can't be saved now really do last until you close the app. Ask AI,
+  the contact label and the AI model all see them, and the next save writes them
+  too. The red message stays until they're saved.
+- Saving now also tries again if the final write is blocked, and no longer leaves a
+  temporary file behind.
+- A lock during startup, or while the app is running, can no longer make settings
+  look blank. The app uses what it last read.
+- If the settings file is found damaged while the app is running, it's rebuilt from
+  the settings last read, and a message says so. A failed write can no longer leave
+  you with no settings file.
+- A new damaged copy no longer replaces an earlier one: they're numbered
+  settings.json.bad, .bad2 and so on.
+- Long FlipRec status messages now wrap instead of being cut off.
+- The window stays hidden during startup dialogs, instead of flashing up empty.
+
 ## 1.4.4 — 2026-11-01
 
 **Fixed**

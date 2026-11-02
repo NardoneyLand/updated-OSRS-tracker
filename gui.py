@@ -565,13 +565,15 @@ HELP_SECTIONS = [
      "    •  Windows: %APPDATA%\\OSRS Tracker\n"
      "    •  macOS: ~/Library/Application Support/OSRS Tracker\n\n"
      "If settings can't be saved, such as when another program has the file "
-     "open, a red message appears at the top of the app. Your changes last until "
-     "you close it, and your other settings aren't touched. If the file can't "
-     "be read when the app starts, it waits briefly, then lets you retry or "
-     "close the app, so it never starts without your settings by accident. If "
-     "the settings file is ever damaged, the app keeps a copy as "
-     "settings.json.bad, tells you if this happens at startup, and starts again "
-     "with default settings.\n\n"
+     "open, a red message appears at the top of the app. Your changes still "
+     "apply, the next setting you change saves them too, and your other settings "
+     "aren't touched. If that doesn't happen before you close the app, those "
+     "changes are lost. If the file can't be read when the app starts, it waits "
+     "briefly, then lets you retry or close the app, so it never starts without "
+     "your settings by accident. If the settings file is ever damaged, the app "
+     "tells you and keeps a copy as settings.json.bad (or .bad2 and so on, so "
+     "earlier copies are kept). At startup it begins again with default settings; "
+     "while it's running it rebuilds the file from the settings it last read.\n\n"
      "Ask AI keys are the exception: they stay in your computer's credential "
      "store."),
 
@@ -597,7 +599,7 @@ HELP_SECTIONS = [
 
 
 FOOTNOTE_WIDTH = 1000         # the longest line under a table, in pixels
-FLIP_STATUS_ROOM = 200        # room for "Prices fetched at 12:00:00"
+STATUS_ROOM = 200             # room for "Prices fetched at 12:00:00"
 
 
 # ── Main Application ──────────────────────────────────────────────────────────
@@ -641,6 +643,8 @@ class OSRSTrackerApp:
         if not self._ensure_contact():
             self.root.destroy()
             return
+        if self.root.state() == "withdrawn":   # hidden for a startup dialog
+            self.root.deiconify()
         self.ready = True
         run_ui_queue(self.root)
         self.root.after(TRADE_AGE_TICK_MS, self._tick_trade_ages)
@@ -678,8 +682,6 @@ class OSRSTrackerApp:
                 "Your settings file is damaged, so the app is starting with "
                 "default settings.\n\nA copy was kept as settings.json.bad in "
                 "your data folder.")
-        if self.root.state() == "withdrawn":
-            self.root.deiconify()
         return True
 
     # ── Contact / User-Agent setup ────────────────────────────────────────────
@@ -692,10 +694,7 @@ class OSRSTrackerApp:
             self._update_contact_label()
             return True
         self.root.withdraw()
-        ok = self._contact_dialog(first_run=True)
-        if ok:
-            self.root.deiconify()
-        return ok
+        return self._contact_dialog(first_run=True)
 
     def _contact_dialog(self, first_run: bool) -> bool:
         """Modal dialog to enter/change the contact. True if saved."""
@@ -793,13 +792,21 @@ class OSRSTrackerApp:
         change still applies until the app closes, so don't stop what the
         user asked for: just tell them it won't last."""
         try:
-            settings.save(values)
+            damaged = settings.save(values)
         except OSError:
             applog.log.warning("Could not save settings", exc_info=True)
+            settings.hold(values)
             self.settings_warning.set(
                 "Settings not saved. Changes last until you close the app.")
         else:
-            self.settings_warning.set("")
+            self._settings_saved(damaged)
+
+    def _settings_saved(self, damaged: bool):
+        """A save worked, so nothing is waiting any more. Say so if it found
+        the file damaged, which otherwise nothing would show."""
+        self.settings_warning.set(
+            "Your settings file was damaged and has been rebuilt. A copy was "
+            "kept in your data folder." if damaged else "")
 
     def _update_contact_label(self):
         if hasattr(self, "contact_label_var"):
@@ -2086,22 +2093,30 @@ class OSRSTrackerApp:
         return (fmt_gp_exact if self.search_format_var.get().startswith("Exact")
                 else fmt_gp)
 
-    def _wrap_toolbar(self, bar, left, right, right_width=None):
+    def _wrap_toolbar(self, bar, left, right, status=None):
         """Two groups of controls: on one row while they fit, otherwise two
-        rows, so a narrow window can't squeeze a button away. right_width is
-        how much room the right group needs, if that isn't its current size:
-        a status changing mustn't make the bar jump."""
+        rows, so a narrow window can't squeeze a button away. A status in the
+        right group wraps to the room left over, and the row is chosen as if it
+        were short, so its text changing doesn't make the bar jump."""
         left.grid(row=0, column=0, sticky="w")
-        right.grid(row=0, column=1, sticky="w")
+        right.grid(row=0, column=1, sticky="nw")
         bar.columnconfigure(1, weight=1)
 
         def place(event):
-            needed = right_width() if right_width else right.winfo_reqwidth()
-            if event.width >= left.winfo_reqwidth() + needed:
-                right.grid(row=0, column=1, columnspan=1, sticky="w", pady=0)
+            buttons = right.winfo_reqwidth()
+            if status:
+                buttons -= status.winfo_reqwidth()
+            needed = buttons + (STATUS_ROOM if status else 0)
+            one_row = event.width >= left.winfo_reqwidth() + needed
+            if one_row:
+                right.grid(row=0, column=1, columnspan=1, sticky="nw", pady=0)
             else:
-                right.grid(row=1, column=0, columnspan=2, sticky="w",
+                right.grid(row=1, column=0, columnspan=2, sticky="nw",
                            pady=(8, 0))
+            if status:
+                used = left.winfo_reqwidth() if one_row else 0
+                status.configure(
+                    wraplength=max(100, event.width - used - buttons))
         bar.bind("<Configure>", place)
 
     def _pack_table(self, frame, tree, bottom=10):
@@ -2420,14 +2435,13 @@ class OSRSTrackerApp:
         actions = ttk.Frame(bar)
         self.flip_refresh_btn = ttk.Button(
             actions, text="Refresh", command=self._refresh_fliprec)
-        self.flip_refresh_btn.pack(side="left")
+        self.flip_refresh_btn.pack(side="left", anchor="n")
 
         self.flip_status = tk.StringVar(value="")
-        ttk.Label(actions, textvariable=self.flip_status, style="Dim.TLabel"
-                  ).pack(side="left", padx=12)
-        self._wrap_toolbar(
-            bar, filters, actions,
-            lambda: self.flip_refresh_btn.winfo_reqwidth() + FLIP_STATUS_ROOM)
+        status = ttk.Label(actions, textvariable=self.flip_status,
+                           style="Dim.TLabel", justify="left")
+        status.pack(side="left", padx=12)
+        self._wrap_toolbar(bar, filters, actions, status)
 
         # Banner for items that are not actively trading
         self.flip_banner = tk.StringVar(value="")
@@ -3415,7 +3429,8 @@ class OSRSTrackerApp:
                 return                 # the count already says it's too long
             if text != saved:
                 try:
-                    settings.save({"ai_instructions": text})
+                    self._settings_saved(
+                        settings.save({"ai_instructions": text}))
                 except OSError:
                     error.set("Couldn't save your instructions, so nothing "
                               "changed. Check that the data folder isn't "
@@ -3531,7 +3546,16 @@ class OSRSTrackerApp:
                     return
                 note = warning or f"{ai.service_name(provider, url)} key saved."
                 if custom:
-                    self._save_settings({"ai_base_url": url})
+                    # The key must never be stored against any other URL.
+                    try:
+                        self._settings_saved(
+                            settings.save({"ai_base_url": url}))
+                    except OSError:
+                        applog.log.warning("Could not save the URL",
+                                           exc_info=True)
+                        error.set("Couldn't save the URL, so the key wasn't "
+                                  "stored either. Try again in a moment.")
+                        return
                 if not ai.save_key(provider, key):
                     note = ("No credential store is available, so the key "
                             "will only be kept until you close the app.")

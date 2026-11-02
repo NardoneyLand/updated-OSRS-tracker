@@ -149,6 +149,19 @@ def scenario():
               f"FlipRec at 900: the status shows beside it: {label.winfo_width()}")
         check(right_edge(bar.winfo_children()[0], bar) <= bar.winfo_width(), "FlipRec at 900: the filters all fit")
 
+        # A long status wraps instead of being cut off
+        long_status = "Error: " + "the server said no " * 12
+        for size in ("900x560", "1120x560", "1250x860"):
+            resize(size)
+            app.flip_status.set(long_status)
+            settle()
+            check(right_edge(label, bar) <= bar.winfo_width() and label.winfo_height() > 25,
+                  f"FlipRec at {size}: a long status wraps inside the bar: {right_edge(label, bar)} of {bar.winfo_width()}")
+            check(label.winfo_width() >= label.winfo_reqwidth(), f"FlipRec at {size}: and shows in full")
+            check(right_edge(refresh, bar) <= bar.winfo_width(), f"FlipRec at {size}: without moving Refresh off screen")
+        app.flip_status.set("Prices fetched at 12:00:00")
+        resize("900x560")
+
         app.notebook.select(app.alerts_tab)
         settle()
         alert_actions = app.alerts_check_btn.master

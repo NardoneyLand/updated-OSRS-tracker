@@ -9,7 +9,7 @@ tmp = tempfile.mkdtemp()
 PATH = settings.SETTINGS_FILE = os.path.join(tmp, "settings.json")
 BAD = PATH + ".bad"
 db.DB_NAME = os.path.join(tmp, "t.db")
-settings.READ_RETRY_SECONDS = 0.01
+settings.RETRY_SECONDS = 0.01
 
 failures = []
 
@@ -33,10 +33,17 @@ def read():
 FULL = {"ua_contact": "me", "capital": "500m", "ai_instructions": "my layout"}
 
 
+def forget():
+    """As if the app had just started."""
+    settings._last_read = None
+    settings._unsaved = {}
+
+
 def reset():
-    for path in (PATH, BAD):
+    for path in (PATH, BAD, BAD + "2", BAD + "3"):
         if os.path.exists(path):
             os.remove(path)
+    forget()
     write(json.dumps(FULL))
 
 
@@ -79,7 +86,7 @@ check(read() == {"capital": "1m", "a": 1}, "a later save adds to what's there")
 
 # Briefly unreadable: the retry saves everything
 reset()
-with ReadFails(settings.READ_ATTEMPTS - 1, PermissionError("locked")):
+with ReadFails(settings.ATTEMPTS - 1, PermissionError("locked")):
     settings.save({"flip_verdict": "Profitable"})
 check(read() == {**FULL, "flip_verdict": "Profitable"}, "a brief lock keeps every setting")
 check(not os.path.exists(BAD), "and isn't mistaken for damage")
@@ -88,7 +95,7 @@ check(not os.path.exists(BAD), "and isn't mistaken for damage")
 reset()
 before = open(PATH).read()
 try:
-    with ReadFails(settings.READ_ATTEMPTS, PermissionError("locked")):
+    with ReadFails(settings.ATTEMPTS, PermissionError("locked")):
         settings.save({"capital": ""})
     check(False, "a lasting lock raises")
 except OSError:
@@ -106,6 +113,7 @@ check(read() == {**FULL, "a": 1} and not os.path.exists(BAD), "one garbled read 
 for text, what in (('{"capital": "5', "cut-off"), ("", "empty"), ("[1, 2]", "not settings"), ("\x00\x01garbage", "garbage")):
     reset()
     write(text)
+    forget()
     settings.save({"capital": "1m"})
     check(read() == {"capital": "1m"}, f"{what} file: saving carries on")
     check(os.path.exists(BAD) and open(BAD).read() == text, f"{what} file: a copy is kept")
@@ -114,10 +122,13 @@ for text, what in (('{"capital": "5', "cut-off"), ("", "empty"), ("[1, 2]", "not
 
 # load() tries again too, and still never raises
 reset()
-with ReadFails(settings.READ_ATTEMPTS - 1, PermissionError("locked")):
+with ReadFails(settings.ATTEMPTS - 1, PermissionError("locked")):
     check(settings.load() == FULL, "load gets past a brief lock")
-with ReadFails(settings.READ_ATTEMPTS, PermissionError("locked")):
-    check(settings.load() == {}, "load falls back to nothing without raising")
+with ReadFails(settings.ATTEMPTS, PermissionError("locked")):
+    check(settings.load() == FULL, "a longer lock gives what it last read, without raising")
+forget()
+with ReadFails(settings.ATTEMPTS, PermissionError("locked")):
+    check(settings.load() == {}, "with nothing read yet there's nothing to give")
 
 # The check at launch
 for path in (PATH, BAD):
@@ -126,11 +137,11 @@ for path in (PATH, BAD):
 check(settings.check_at_launch() is False and not os.path.exists(PATH), "launch: a first run has nothing to check")
 reset()
 check(settings.check_at_launch() is False and read() == FULL, "launch: a good file is left alone")
-with ReadFails(settings.LAUNCH_READ_ATTEMPTS - 1, PermissionError("locked")):
+with ReadFails(settings.LAUNCH_ATTEMPTS - 1, PermissionError("locked")):
     check(settings.check_at_launch() is False, "launch: waits out a lock longer than a save does")
-check(settings.LAUNCH_READ_ATTEMPTS > settings.READ_ATTEMPTS, "launch: and is more patient")
+check(settings.LAUNCH_ATTEMPTS > settings.ATTEMPTS, "launch: and is more patient")
 try:
-    with ReadFails(settings.LAUNCH_READ_ATTEMPTS, PermissionError("locked")):
+    with ReadFails(settings.LAUNCH_ATTEMPTS, PermissionError("locked")):
         settings.check_at_launch()
     check(False, "launch: a lasting lock raises")
 except OSError:
@@ -139,6 +150,82 @@ check(read() == FULL and not os.path.exists(BAD), "launch: and changes nothing")
 write('{"capital": "5')
 check(settings.check_at_launch() is True, "launch: says when the file was damaged")
 check(not os.path.exists(PATH) and open(BAD).read() == '{"capital": "5', "launch: and keeps a copy")
+write('{"capital": "6')
+check(settings.check_at_launch() is True, "launch: a second damaged file")
+check(open(BAD).read() == '{"capital": "5' and open(BAD + "2").read() == '{"capital": "6', "launch: doesn't replace the first copy")
+reset()
+settings.check_at_launch()
+with ReadFails(settings.ATTEMPTS, PermissionError("locked")):
+    check(settings.load() == FULL, "launch: a lock straight after the check still gives the real settings")
+
+# Damaged while running: rebuilt from what was last read, with a copy kept
+reset()
+settings.load()
+write('{"capital": "5')
+check(settings.save({"a": 1}) is True, "running: save says the file was damaged")
+check(read() == {**FULL, "a": 1}, "running: nothing else is lost")
+check(open(BAD).read() == '{"capital": "5', "running: a copy is kept")
+check(settings.save({"b": 2}) is False, "running: and it isn't damaged any more")
+
+# Damaged, and then the write fails: the file stays where it is
+reset()
+settings.load()
+write('{"capital": "5')
+real_replace = os.replace
+
+
+def replace_fails(*a):
+    raise PermissionError("locked")
+
+
+os.replace = replace_fails
+try:
+    settings.save({"a": 1})
+    check(False, "a failed write raises")
+except OSError:
+    check(True, "a failed write raises")
+finally:
+    os.replace = real_replace
+check(open(PATH).read() == '{"capital": "5', "and the settings file is still there")
+check(not os.path.exists(PATH + ".tmp"), "and no temporary file is left behind")
+
+# The final write gets retries too
+reset()
+tries = []
+
+
+def replace_blocked_once(*a):
+    tries.append(a)
+    if len(tries) < settings.ATTEMPTS:
+        raise PermissionError("locked")
+    real_replace(*a)
+
+
+os.replace = replace_blocked_once
+try:
+    settings.save({"a": 1})
+finally:
+    os.replace = real_replace
+check(read() == {**FULL, "a": 1} and len(tries) == settings.ATTEMPTS, "a brief lock on the final write is waited out")
+
+# Changes that can't be saved yet
+reset()
+settings.load()
+settings.hold({"capital": "9m"})
+check(settings.load()["capital"] == "9m" and read()["capital"] == "500m", "held: seen by load, not yet in the file")
+with ReadFails(settings.ATTEMPTS, PermissionError("locked")):
+    check(settings.load() == {**FULL, "capital": "9m"}, "held: seen during a lock too")
+settings.hold({"a": 1})
+settings.save({"b": 2})
+check(read() == {**FULL, "capital": "9m", "a": 1, "b": 2}, "held: the next good save writes them all")
+check(settings._unsaved == {}, "held: and nothing is waiting any more")
+settings.hold({"c": 3})
+with ReadFails(settings.ATTEMPTS, PermissionError("locked")):
+    try:
+        settings.save({"d": 4})
+    except OSError:
+        pass
+check(settings._unsaved == {"c": 3}, "held: a save that fails keeps what was waiting")
 
 # A real lock from another program, as antivirus or a backup tool holds one
 if sys.platform == "win32":
@@ -231,9 +318,21 @@ def retry(*a, **k):
 
 
 gui.messagebox.askretrycancel = retry
+real_build = gui.OSRSTrackerApp._build_ui
+states_while_building = []
+
+
+def watched_build(self):
+    states_while_building.append(self.root.state())
+    real_build(self)
+
+
+gui.OSRSTrackerApp._build_ui = watched_build
 with lock:
     root = tk.Tk()
     app = gui.OSRSTrackerApp(root)
+gui.OSRSTrackerApp._build_ui = real_build
+check(states_while_building == ["withdrawn"], f"launch: no empty window while it builds: {states_while_building}")
 check(len(retries) == 1 and app.ready, "launch: retry carries on once the file is free")
 check(root.state() == "normal", "launch: and the window comes back")
 check(warned == [], "launch: a lock isn't reported as damage")
@@ -274,7 +373,7 @@ def scenario():
         check(app.settings_warning.get() == "", "no warning to start with")
 
         # A change that can't be saved still happens, with a message and no pop-up
-        with ReadFails(settings.READ_ATTEMPTS, PermissionError("locked")):
+        with ReadFails(settings.ATTEMPTS, PermissionError("locked")):
             app.flip_format_var.set(gui.PRICE_FORMATS[1])
             app._on_price_format_changed()
         root.update()
@@ -282,8 +381,9 @@ def scenario():
         check("Settings not saved" in app.settings_warning.get(), "the header says it wasn't saved")
         check(popups == [], f"with no error box: {popups}")
         check(app._error_shown is False, "and no error recorded for the window")
-        check(settings.load().get("flip_price_format") != gui.PRICE_FORMATS[1], "and it really wasn't saved")
-        check(settings.load().get("ua_contact") == "test-contact", "the other settings survive")
+        check(read().get("flip_price_format") != gui.PRICE_FORMATS[1], "and it really wasn't saved")
+        check(read().get("ua_contact") == "test-contact", "the other settings survive")
+        check(settings.load().get("flip_price_format") == gui.PRICE_FORMATS[1], "but the rest of the app sees the change")
 
         # Nothing in the header can cut the message off, at the smallest window
         size = root.geometry()
@@ -298,11 +398,11 @@ def scenario():
         root.geometry(size)
 
         # The next save that works clears the message
-        app._on_price_format_changed()
+        app._on_alert_interval_changed()
         check(app.settings_warning.get() == "", "the next good save clears the message")
         root.update()
         check(label.winfo_manager() == "", "and the row goes away")
-        check(settings.load().get("flip_price_format") == gui.PRICE_FORMATS[1], "and saves the choice")
+        check(read().get("flip_price_format") == gui.PRICE_FORMATS[1], "and it saves the waiting change, not just its own")
 
         # Every other place that saves behaves the same way
         real_save = settings.save
@@ -329,9 +429,40 @@ def scenario():
         app._monitor_tick()
         settle(lambda: not app._monitor_busy)
 
-        # Nothing else in the app calls save directly, except the dialog with its own message
+        # Finding the file damaged while running gets its own message
+        write('{"capital": "5')
+        app._on_price_format_changed()
+        check("damaged" in app.settings_warning.get(), f"damage says so: {app.settings_warning.get()}")
+        check(read().get("ua_contact") == "test-contact", "and the file is rebuilt")
+        app._on_price_format_changed()
+        check(app.settings_warning.get() == "", "and the message clears with the next save")
+
+        # A changed contact that can't be saved is what the label shows
+        settings.save = blocked
+        try:
+            app._save_settings({"ua_contact": "new-contact"})
+            app._update_contact_label()
+            if hasattr(app, "contact_label_var"):
+                check("new-contact" in app.contact_label_var.get(), "the label shows the contact in use")
+            check(settings.load()["ua_contact"] == "new-contact", "and so does the contact dialog")
+        finally:
+            settings.save = real_save
+        app._on_price_format_changed()
+        check(read()["ua_contact"] == "new-contact", "and it's saved once it can be")
+
+        # Ask AI reads settings from the file, so it needs to see unsaved ones too
+        import aitools
+        settings.save = blocked
+        try:
+            app._save_settings({"capital": "77m"})
+            check(aitools._user_capital() == 77_000_000, "Ask AI uses the unsaved Capital")
+        finally:
+            settings.save = real_save
+        app._on_price_format_changed()
+
+        # Only these save directly, each with its own message if it can't
         source = open(os.path.join(REPO, "gui.py"), encoding="utf-8").read()
-        check(source.count("settings.save(") == 2, f"only _save_settings and the Instructions dialog save directly: {source.count('settings.save(')}")
+        check(source.count("settings.save(") == 3, f"only _save_settings, Instructions and the key dialog save directly: {source.count('settings.save(')}")
 
         helptext = " ".join(body for _title, body in gui.HELP_SECTIONS)
         check("settings.json.bad" in helptext and "red message" in helptext, "Help explains both")

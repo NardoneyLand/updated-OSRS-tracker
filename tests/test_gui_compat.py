@@ -191,6 +191,27 @@ def scenario():
         root.after(300, change_url)
         app._ai_key_dialog(ai.COMPATIBLE)
         check(settings.load()["ai_base_url"] == FAKE.replace("127.0.0.1", "localhost"), "URL changed with the key")
+
+        # A URL that can't be saved: its key must not end up with the old URL
+        real_save = settings.save
+        def blocked(values):
+            raise PermissionError("locked")
+        def url_not_saved():
+            d = dialog()
+            url_entry, key_entry = find_all(d, ttk.Entry)
+            url_entry.delete(0, "end")
+            url_entry.insert(0, FAKE)
+            key_entry.insert(0, "custom-key-9999")
+            settings.save = blocked
+            button(d, "Save").invoke()
+            wait_for(lambda: "normal" in str(button(d, "Save").cget("state")))
+            settings.save = real_save
+            check(d.winfo_exists(), "the key window stays open when its URL can't be saved")
+            check(KEYS.get(ai.COMPATIBLE) == "custom-key-5678", "and the new key isn't stored")
+            check(settings.load()["ai_base_url"] == FAKE.replace("127.0.0.1", "localhost"), "and the old URL is still the one in use")
+            button(d, "Cancel").invoke()
+        root.after(300, url_not_saved)
+        app._ai_key_dialog(ai.COMPATIBLE)
         F.SCRIPTS["compat"] = [[chunk({"content": "New host."}), chunk(finish="stop")]]
         app._ai_send("hello again")
         wait_for(lambda: app._ai_cancel is None)
