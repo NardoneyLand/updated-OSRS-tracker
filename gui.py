@@ -348,20 +348,21 @@ HELP_SECTIONS = [
      "more if you've set a slower Refresh.\n\n"
      "If a fetch fails, the bar says so and the tables keep their last prices."),
 
-    ("Columns on every table",
+    ("Columns on the main tables",
      "FlipRec, Watchlist and Volatile all start with the same columns, "
      "in the same order: Item, Buy, Sell, Qty, ROI, Upfront, Est. profit, Vol 1h "
      "and Last trade. Each tab adds its own to the right, and a Search result "
      "shows the same values. If they don't all fit, scroll sideways. Your sort, "
      "selected rows and scroll position stay when prices update.\n\n"
-     "To move a column, drag its header left or right. A gold line shows where "
-     "it will land, and each tab remembers its own order. Item always stays "
+     "To move a column on those three tabs, drag its header left or right. A "
+     "gold line shows where it will land, and each tab remembers its own order. "
+     "Item always stays "
      "first. To put a tab back as it was, right-click any header and choose "
      "Reset columns. Clicking a header still sorts by it.\n\n"
-     "To see what a column means, rest the mouse on its header."),
+     "To see what a column means on any table, rest the mouse on its header."),
 
     ("Right-click menu",
-     "Right-click a row on FlipRec, Watchlist or Volatile:\n\n"
+     "Right-click a row on FlipRec, Watchlist, Ignored List or Volatile:\n\n"
      "    •  Add to Watchlist, or Remove from Watchlist.\n"
      "    •  Ignore item — adds it to the Ignored List tab, or Remove from "
      "Ignored List.\n"
@@ -382,11 +383,12 @@ HELP_SECTIONS = [
      "Inactive below).\n"
      "    •  Traded within — hides items where a side hasn't traded in that "
      "long, going by the same age as Last trade. It applies to every Show "
-     "choice except Inactive, and goes by the time of the last market check.\n"
+     "choice except Inactive. It's applied when prices update or you change a "
+     "filter, so a row can pass that age before the next update.\n"
      "    •  Min Vol 1h — hides items under that Vol 1h, from 1,000 to 10,000. "
      "It goes by the same number as the Vol 1h column, the slower side, and "
-     "applies to every Show choice except Inactive. It only changes this list, "
-     "not which flips alert you.\n"
+     "applies to every Show choice except Inactive. Like Traded within, it only "
+     "changes this list, not which flips alert you.\n"
      "    •  Show — Alerts, which it opens on (see Alerts below), All "
      "verdicts for every flip, or one verdict such as Profitable.\n"
      "    •  Alert when est. profit ≥ — your alert threshold.\n\n"
@@ -408,10 +410,13 @@ HELP_SECTIONS = [
      "usual hour over the last day; ▼ means under half.\n"
      "    •  Last trade — how long ago the older side last traded. "
      "⏱ means over 5 minutes, so the margin may have moved.\n"
-     "    •  Note — how far the current price is from its 1-hour average: "
-     "\"Below 1h average\" (3%+ below), \"Above 1h average\" (3%+ above) or "
-     "\"Extreme move - caution\" (25%+ away). It also says when the last 5 "
-     "minutes' prices don't back up the margin.\n\n"
+     "    •  Note — one detail, if there is one, and the first that applies: "
+     "\"5m margin only\" when the last 5 minutes' prices don't back up the "
+     "margin; \"Held 61%, usually 3\" on an Unsteady flip; how far the price is "
+     "from its 1-hour average, as \"Below 1h average\" (3%+ below), \"Above 1h "
+     "average\" (3%+ above) or \"Extreme move - caution\" (25%+ away); or "
+     "\"History not ready\" while the prices for the Unsteady check are "
+     "loading.\n\n"
      "Click a column header to sort; click again to reverse. Double-click "
      "a row to open the item in Search."),
 
@@ -488,7 +493,7 @@ HELP_SECTIONS = [
      "prices, units traded in the last 12 and 24 hours (the slower side), its "
      "verdict and when you added it. It updates with every market check. "
      "Double-click a row to open the item in Search.\n\n"
-     "Target prices: select a row and click Set target to be told when the "
+     "Target prices: select a row and click Set target… to be told when the "
      "item reaches a price. Buy ≤ watches for the Buy price falling to your "
      "target, and Sell ≥ for the Sell price rising to it. Type 19,000, 19k "
      "or 1.5m.\n"
@@ -583,8 +588,8 @@ HELP_SECTIONS = [
      "Prices often partly reverse after a big move, but usually by less than "
      "the 2% GE tax, so simply doing the opposite doesn't reliably make money "
      "either. Use the margins on FlipRec for flipping decisions.\n\n"
-     "The Note column on FlipRec only reports where the price is against its "
-     "1-hour average. It isn't a recommendation to buy or sell."),
+     "The price notes in FlipRec's Note column only report where the price is "
+     "against its 1-hour average. They aren't a recommendation to buy or sell."),
 
     ("Ask AI — suggestions from your own AI account",
      "Ask questions in plain English, such as \"What should I flip with "
@@ -670,8 +675,8 @@ HELP_SECTIONS = [
      "The OSRS Wiki updates prices from the game about every 60 "
      "seconds. Volumes are true rolling windows, built from the Wiki's "
      "5-minute and hourly data. The first launch downloads a day of it in "
-     "the background (about a minute), and until then the 12h and 24h "
-     "numbers and the ▲▼ arrows stay blank. A * on a volume means the Wiki "
+     "the background (about a minute). Until then the 12h and 24h numbers show "
+     "a dash and the ▲▼ arrows don't appear. A * on a volume means the Wiki "
      "is missing part of that period, so it may read slightly low. The app "
      "fetches prices on the Refresh timer above the tabs (every minute by "
      "default). Last trade shows exactly how old each margin "
@@ -687,8 +692,9 @@ HELP_SECTIONS = [
      "Change contact… at the top of this tab to update it."),
 
     ("Your settings and data",
-     "Your contact, Capital, filters, price formats, alert threshold and "
-     "check rate, and your Ask AI provider, models and instructions are saved "
+     "Your contact, Capital, filters, price formats, column order, alert "
+     "threshold and refresh rate, and your Ask AI provider, models and "
+     "instructions are saved "
      "automatically, along with your watchlist, target prices, Ignored List, "
      "alerts and price history. They're stored on your computer in:\n\n"
      "    •  Windows: %APPDATA%\\OSRS Tracker\n"

@@ -32,7 +32,7 @@ Grab the latest release from the [Releases page](https://github.com/NardoneyLand
 - **macOS (Apple Silicon only)** — download `OSRS-Tracker-<version>.dmg` and drag `OSRS Tracker.app` to Applications. The build is unsigned, so macOS blocks it the first time. On macOS 15 or later, try to open it, then go to **System Settings → Privacy & Security** and click **Open Anyway**. On older versions, right-click the app → **Open** → **Open**.
 - **Windows** — download `OSRS-Tracker-Setup-<version>.exe` and run it. By default it installs for your user only, without admin rights, and adds a Start Menu entry, an uninstaller and an optional desktop shortcut. SmartScreen may warn about an unrecognized publisher: click "More info" → "Run anyway" to allow it once.
 
-On first launch the app asks for a contact, such as a Discord name or email, because the OSRS Wiki asks apps using its prices to send one. Then open FlipRec and enter your gp in Capital. The Help tab explains everything else.
+On first launch the app asks for a contact, such as a Discord name or email, because the OSRS Wiki asks apps using its prices to send one. Then enter your gp in Capital, in the bar above the tabs. The Help tab explains everything else.
 
 App data lives in:
 - macOS: `~/Library/Application Support/OSRS Tracker/`
