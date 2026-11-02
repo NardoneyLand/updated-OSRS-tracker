@@ -3,6 +3,14 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.4 — 2026-11-02
+
+**Fixed**
+- Help now describes everything the Note column can say, and how Traded within is
+  applied. It also lists the Ignored List under the right-click menu, and says which
+  tables can have their columns moved.
+- The README's first-launch steps now say Capital is in the bar above the tabs.
+
 ## 1.6.3 — 2026-11-02
 
 **New**
