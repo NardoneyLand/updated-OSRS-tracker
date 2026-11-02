@@ -12,7 +12,7 @@ Tabs: **FlipRec** · **Watchlist** · **Ignored List** · **Volatile** · **Sear
 ## Features
 
 - **One bar for every tab** — set your Capital, Items filter, price format and refresh rate above the tabs. One refresh updates every tab at once, so an item shows the same prices everywhere.
-- **The same columns on every table** — Item, Buy, Sell, Qty, ROI, Upfront, Est. profit, Vol 1h and Last trade, in that order, with each tab's own columns to the right. Drag a header to move a column, and each tab remembers its own order.
+- **The same columns on every table** — Item, Buy, Sell, Qty, ROI, Upfront, Est. profit, Vol 1h and Last trade, in that order, with each tab's own columns to the right. Drag a header to move a column, and each tab remembers its own order. Rest the mouse on a header to see what the column means.
 - **FlipRec** — opens on your profit alerts, and can show every item you can buy and resell at a profit after the 2% GE tax, priced like an in-game margin check. Adds the margin, tax, buy limit, Profitable / Marginal / Unsteady / Suspect / Inactive verdicts, and a note on how far the price is from its 1-hour average. Unsteady marks a margin that was positive in under 80% of the 5-minute prices from the last 2 hours. Traded within hides items that haven't traded recently, from 1 minute to 1 hour.
 - **Profit alerts** — FlipRec alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and, on Windows, a taskbar flash. Alerts keep updating with live prices and disappear once the flip stops qualifying.
 - **Watchlist** — add items by right-clicking them in a table or from Search, follow their live margins, and set target prices to be alerted when an item's Buy price falls to one or its Sell price rises to one.

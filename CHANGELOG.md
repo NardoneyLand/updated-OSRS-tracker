@@ -3,6 +3,11 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.2 — 2026-11-02
+
+**New**
+- Rest the mouse on a column header to see what that column means, on every table.
+
 ## 1.6.1 — 2026-11-02
 
 **New**

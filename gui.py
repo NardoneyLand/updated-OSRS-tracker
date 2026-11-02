@@ -355,7 +355,8 @@ HELP_SECTIONS = [
      "To move a column, drag its header left or right. A gold line shows where "
      "it will land, and each tab remembers its own order. Item always stays "
      "first. To put a tab back as it was, right-click any header and choose "
-     "Reset columns. Clicking a header still sorts by it."),
+     "Reset columns. Clicking a header still sorts by it.\n\n"
+     "To see what a column means, rest the mouse on its header."),
 
     ("Right-click menu",
      "Right-click a row on FlipRec, Watchlist or Volatile:\n\n"
@@ -738,6 +739,74 @@ def shared_columns(item_width=184) -> list:
     ]
 
 
+# What each column means, shown when the mouse rests on its header. A tab can
+# give its own wording where a column means something else there.
+HEADER_TIP_DELAY = 500         # ms the mouse must rest on a header
+HEADER_HELP = {
+    "item": "The item's name. Double-click a row to open it in Search, or "
+            "right-click it for more.",
+    "buy": "What you'd pay per item: the latest price someone instantly sold at.",
+    "sell": "What you'd sell for per item: the latest price someone instantly "
+            "bought at.",
+    "qty": "How many you could realistically flip: the lowest of what your "
+           "Capital buys, the 4h limit and about 4 hours of Vol 1h.",
+    "roi": "Profit per item after tax, as a percentage of the Buy price.",
+    "cost": "The gp needed to buy the whole Qty: Buy × Qty.",
+    "profit": "Total profit if the whole Qty fills at these prices: "
+              "Net / item × Qty.",
+    "volume": "Units traded in the last hour on the slower side, which limits "
+              "how fast a flip fills. ▲ means at least 3x its usual hour, "
+              "▼ means under half.",
+    "age": "How long ago the older of the two prices traded. ⏱ means over "
+           "5 minutes, so the margin may have moved.",
+    "net": "Your profit per item after tax: Sell − GE tax − Buy.",
+    "tax": "The tax on selling one: 2% of Sell, rounded down and capped at 5M. "
+           "A few items are exempt.",
+    "limit": "The most the GE lets you buy of this item every 4 hours. "
+             "? means it isn't known.",
+    "verdict": "Profitable: 1%+ ROI and 10+ items an hour on each side.\n"
+               "Marginal: makes money, but thin ROI or low volume.\n"
+               "Unsteady: makes money now, but the margin was there under 80% "
+               "of the time lately.\n"
+               "Suspect: looks too good to be true.\n"
+               "Inactive: a side hasn't traded in the last hour.",
+    "signal": "One extra detail, if there is one: a margin the last 5 minutes "
+              "don't back up, how steady the margin has been, or how far the "
+              "price is from its 1-hour average.",
+}
+WATCH_HEADER_HELP = {
+    "verdict": HEADER_HELP["verdict"] + "\nUnprofitable: the tax eats the margin.",
+    "target_below": "Your target: you're told when the Buy price falls to this "
+                    "or lower.",
+    "target_above": "Your target: you're told when the Sell price rises to this "
+                    "or higher.",
+    "vol_12h": "Units traded in the last 12 hours on the slower side. * means "
+               "some data is missing, so it may read a little low.",
+    "vol_24h": "Units traded in the last 24 hours on the slower side. * means "
+               "some data is missing, so it may read a little low.",
+    "added": "When you added this item to your Watchlist.",
+}
+IGNORED_HEADER_HELP = {
+    "item": "The item's name. Double-click a row to open it in Search, or "
+            "right-click it to bring it back.",
+    "added": "When you added this item to your Ignored List.",
+}
+VOLATILE_HEADER_HELP = {
+    "pct": "How far the price has moved from its average over the window you "
+           "picked.",
+    "avg": "The average price over the window you picked.",
+    "window_volume": "Units traded during the window you picked. Both sides are "
+                     "added together, so it isn't comparable with Vol 1h.",
+}
+NEWS_HEADER_HELP = {
+    "title": "The article's headline. Double-click a row to open it in your "
+             "browser.",
+    "source": "Where the article came from.",
+    "date": "When the app first saved this article, which can be later than "
+            "when it was published.",
+}
+
+
 # ── Main Application ──────────────────────────────────────────────────────────
 
 class OSRSTrackerApp:
@@ -754,6 +823,9 @@ class OSRSTrackerApp:
         self._row_menu = None          # the open right-click menu
         self._column_tables = {}       # table -> its name in the saved order
         self._column_drag = None       # the header being dragged
+        self._header_tip = None        # (window, label) for header hover text
+        self._header_tip_target = None # (table, column) the mouse is resting on
+        self._header_tip_timer = None  # waiting for the mouse to stay put
         self._column_markers = {}      # table -> the line showing where it'll land
         self._monitor_started = False
         self._monitor_busy = False
@@ -2018,6 +2090,7 @@ class OSRSTrackerApp:
         self._movable_columns(tree, "watchlist")
         self.watch_id_map = {}
         self._add_row_menu(tree, self.watch_id_map)
+        self._add_header_help(tree, WATCH_HEADER_HELP)
         # Kept across refreshes; oldest added first until a header is clicked.
         self.watch_sort = ("added", False)
         self._update_watch_arrows()
@@ -2320,6 +2393,7 @@ class OSRSTrackerApp:
         self.ignored_tree = tree
         self.ignored_id_map = {}
         self._add_row_menu(tree, self.ignored_id_map)
+        self._add_header_help(tree, IGNORED_HEADER_HELP)
         # Newest first until a header is clicked.
         self.ignored_sort = ("added", True)
         self._update_ignored_arrows()
@@ -2403,6 +2477,72 @@ class OSRSTrackerApp:
         tree.bind("<ButtonPress-1>", lambda e: self._column_press(e, tree))
         tree.bind("<B1-Motion>", lambda e: self._column_motion(e, tree))
         tree.bind("<ButtonRelease-1>", lambda e: self._column_release(e, tree))
+
+    def _add_header_help(self, tree, tab_help=None):
+        """Rest the mouse on a header to see what its column means. Call this
+        after the table's other mouse bindings, which would replace these."""
+        help_text = {**HEADER_HELP, **(tab_help or {})}
+
+        def leave(_e=None):
+            self._hide_header_tip()
+            self._header_tip_target = None
+
+        tree.bind("<Motion>", lambda e: self._header_hover(e, tree, help_text),
+                  add="+")
+        tree.bind("<Leave>", leave, add="+")
+        tree.bind("<Unmap>", leave, add="+")
+        # Clicking keeps the target, so the text stays away until you move on.
+        for press in ("<ButtonPress-1>", "<ButtonPress-2>", "<ButtonPress-3>"):
+            tree.bind(press, lambda _e: self._hide_header_tip(), add="+")
+
+    def _header_hover(self, event, tree, help_text):
+        column = None
+        if tree.identify_region(event.x, event.y) == "heading":
+            position = int(tree.identify_column(event.x)[1:]) - 1
+            order = self._display_order(tree)
+            column = order[position] if 0 <= position < len(order) else None
+        if (tree, column) == self._header_tip_target:
+            return
+        self._hide_header_tip()
+        self._header_tip_target = (tree, column)
+        if column in help_text:
+            self._header_tip_timer = self.root.after(
+                HEADER_TIP_DELAY, self._show_header_tip, tree, help_text[column])
+
+    def _show_header_tip(self, tree, text: str):
+        self._header_tip_timer = None
+        x, y = tree.winfo_pointerxy()
+        try:
+            if tree.winfo_containing(x, y) is not tree:
+                return                 # the window went behind another, say
+        except KeyError:               # over a widget Tk doesn't name, like a menu
+            return
+        if not self._header_tip:
+            tip = tk.Toplevel(self.root)
+            tip.withdraw()
+            tip.overrideredirect(True)
+            label = tk.Label(tip, bg=COLOR_PANEL_HI, fg=COLOR_TEXT, font=FONT_BODY,
+                             justify="left", wraplength=340, padx=10, pady=6,
+                             highlightthickness=1,
+                             highlightbackground=COLOR_ACCENT)
+            label.pack()
+            self._header_tip = (tip, label)
+        tip, label = self._header_tip
+        label.config(text=text)
+        tip.update_idletasks()
+        # Kept inside the app's window, which also works on any monitor.
+        right = self.root.winfo_rootx() + self.root.winfo_width()
+        left = max(self.root.winfo_rootx(), min(x + 12, right - tip.winfo_reqwidth()))
+        tip.geometry(f"+{left}+{y + 20}")
+        tip.deiconify()
+        tip.lift()
+
+    def _hide_header_tip(self):
+        if self._header_tip_timer:
+            self.root.after_cancel(self._header_tip_timer)
+            self._header_tip_timer = None
+        if self._header_tip:
+            self._header_tip[0].withdraw()
 
     def _display_order(self, tree) -> list:
         shown = tree["displaycolumns"]
@@ -2750,6 +2890,7 @@ class OSRSTrackerApp:
         self._movable_columns(tree, "volatile")
         self.volatile_id_map = {}  # tree row id -> item id
         self._add_row_menu(tree, self.volatile_id_map)
+        self._add_header_help(tree, VOLATILE_HEADER_HELP)
 
         self._footnote(frame, tree, (
             "Compares the midpoint price now with its average over "
@@ -2977,6 +3118,7 @@ class OSRSTrackerApp:
         self._movable_columns(tree, "fliprec")
         self.flip_id_map = {}
         self._add_row_menu(tree, self.flip_id_map)
+        self._add_header_help(tree)
         self.flip_results = []        # computed for the current filters
         self.flip_sort = (None, None)
 
@@ -3190,6 +3332,7 @@ class OSRSTrackerApp:
 
         tree.bind("<Double-Button-1>", self._on_news_open)
         self._pack_table(frame, tree, bottom=20)
+        self._add_header_help(tree, NEWS_HEADER_HELP)
         self.news_tree = tree
         self.news_urls = {}
 
