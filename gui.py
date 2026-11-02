@@ -162,10 +162,17 @@ def parse_targets(below_text: str, above_text: str) -> tuple:
 
 
 def saved_ai_instructions(prefs: dict) -> str:
-    """The instructions in the settings. Every question sends them, so a
+    """The instructions in the settings. Until some are saved, that's the defaults
+    plus anything saved before they existed, which stays under its old setting
+    so older versions can still read it. Every question sends them, so a
     hand-edited value is held to the limit, and ignored if it isn't text."""
-    saved = prefs.get("ai_instructions")
-    return saved.strip()[:ai.MAX_INSTRUCTIONS] if isinstance(saved, str) else ""
+    saved = prefs.get("ai_standing_instructions")
+    if not isinstance(saved, str):
+        older = prefs.get("ai_instructions")
+        saved = ai.DEFAULT_INSTRUCTIONS
+        if isinstance(older, str) and older.strip():
+            saved += "\n\n" + older.strip()
+    return saved.strip()[:ai.MAX_INSTRUCTIONS]
 
 
 def fmt_target(target, hit, fmt) -> str:
@@ -391,6 +398,10 @@ HELP_SECTIONS = [
      "and at least 10 traded per hour on each side.\n"
      "    •  Marginal — still profitable after tax, but a thin ROI or low "
      "volume.\n"
+     "    •  Unsteady — profitable right now, but the margin was positive in "
+     "under 80% of the last 2 hours of 5-minute average prices, so it may be a "
+     "brief high. The Note column shows how often it held and its usual size. "
+     "Items without enough recent trades aren't marked.\n"
      "    •  Suspect — looks too good to be true: ROI over 40%, the "
      "price is 25%+ away from its 1-hour average, or the margin at the last "
      "5 minutes' average prices is under half the margin shown. Often one "
@@ -399,8 +410,8 @@ HELP_SECTIONS = [
      "margin is probably not real.\n"
      "    •  Unprofitable — (Watchlist only) the tax eats the whole "
      "margin.\n\n"
-     "Sorting the Verdict column goes Profitable → Marginal → Suspect → "
-     "Inactive, best profit first within each."),
+     "Sorting the Verdict column goes Profitable → Marginal → Unsteady → "
+     "Suspect → Inactive, best profit first within each."),
 
     ("The GE tax",
      "The seller pays 2% of the sell price, rounded down, per item:\n\n"
@@ -427,7 +438,8 @@ HELP_SECTIONS = [
      "ones.\n"
      "    •  Only actively traded items count: both sides must have "
      "traded in the last 5 minutes. Suspect items are left out, including "
-     "margins the last 5 minutes' average prices don't back up.\n"
+     "margins the last 5 minutes' average prices don't back up. Unsteady items "
+     "still alert, marked by their verdict and row color.\n"
      "    •  Each item alerts at most once an hour. An alert that comes back "
      "within the hour returns quietly, without flashing.\n"
      "    •  The FlipRec tab shows how many alerts are live, e.g. FlipRec (3), "
@@ -565,16 +577,27 @@ HELP_SECTIONS = [
      "support tools (also called function calling), because that's how it "
      "reads the app's data. Faster models usually cost less. Changing the "
      "model starts a new conversation.\n\n"
-     "Your instructions: click Instructions… to save directions that go with "
-     "every question, so answers come back the same way each time. Click Add an "
-     "example to start from this:\n\n"
+     "How current the answers are: each question starts by fetching new "
+     "prices, and the line under the answer says when. Those prices are the last "
+     "trade on each side, not a live order book, so they can move before you "
+     "buy. Ask again for new numbers. Like alerts, the AI's flip search skips "
+     "Suspect flips and flips with a side idle over 5 minutes unless you ask "
+     "for them, and it warns about Unsteady ones. Asking about an item by name "
+     "still shows its numbers, with any warning.\n\n"
+     "Your instructions: click Instructions… to see or change the directions "
+     "that go with every question. It starts with the app's default instructions, "
+     "and anything you saved before they were added comes after them. Click Add "
+     "an example to add this:\n\n"
      "    When giving item information, use this layout:\n"
      "    Item: name\n"
      "    Buy: price in full gp\n"
      "    Sell: price in full gp\n"
      "    and so on\n\n"
-     "    •  The button shows a ✓ while instructions are saved. To stop using "
-     "them, click Clear in the same window, then Save.\n"
+     "    •  The button shows a ✓ when yours differ from the defaults. To go "
+     "back, click Reset to default, then Save. To use none, click Clear, then "
+     "Save.\n"
+     "    •  View built-in rules shows the rest of what the AI is told, such as "
+     "how the app's numbers work. You can read those but not change them.\n"
      "    •  They shape how the AI answers, such as layout, tone, length and "
      "what to include. They can't change the app's data or let the AI change "
      "anything, and it may not follow them perfectly.\n"
@@ -723,6 +746,7 @@ class OSRSTrackerApp:
         self._search_volume = None     # (frame, item_id, cells) showing the table
         self._search_stats = {}        # label -> value widget on the Search panel
         self._search_notes = None      # (frame, text label) for Worth knowing
+        self._search_held_note = None  # the margin check, also in Worth knowing
         self._search_facts_busy = False
         self._search_facts_at = 0      # when those facts were last worked out
         self._search_trade = None      # (label, high time, low time)
@@ -1487,7 +1511,8 @@ class OSRSTrackerApp:
         _latest, bulk, fetched_at, bulk_5m = self._market or ({}, {}, None, {})
         row = analyzer.flip_row(item, price_data, bulk.get(item_id),
                                 self._flip_capital() or 0, now=fetched_at,
-                                avg_5m=bulk_5m.get(item_id))
+                                avg_5m=bulk_5m.get(item_id),
+                                recent_prices=self._volume.recent_prices)
         fmt = self._search_price_fmt()
         high = price_data.get("high") or 0
         low = price_data.get("low") or high
@@ -1501,6 +1526,10 @@ class OSRSTrackerApp:
                                 ("Upfront", "cost"), ("Est. profit", "profit"),
                                 ("Vol 1h", "volume")):
                 values[label] = cells[cell]
+        self._search_held_note = (
+            f"The margin was positive in only {row['margin_held']}% of the last 2 "
+            f"hours, and is usually {fmt(row['typical_margin'])} gp."
+            if row and row["verdict"] == "Unsteady" else None)
         for label, widget in self._search_stats.items():
             if label in ("Qty", "ROI", "Upfront", "Est. profit", "Vol 1h"):
                 widget.config(text=values.get(label, "-"))
@@ -1521,9 +1550,18 @@ class OSRSTrackerApp:
         self._search_stats["Momentum"].config(
             text={"rising": "Rising lately", "falling": "Falling lately"
                   }.get(facts["momentum"], "Flat"))
+        self._show_search_notes()
+
+    def _show_search_notes(self):
+        """Worth knowing: facts from the item's history, and the margin check."""
+        facts = self._search_shown.get("facts") or {}
+        held = self._search_held_note
+        lines = list(facts.get("notes") or []) + ([held] if held else [])
+        if not self._search_notes or not self._search_notes[0].winfo_exists():
+            return             # the panel is still being built
         frame, notes = self._search_notes
-        notes.config(text="\n".join(f"  •  {r}" for r in facts["notes"]))
-        if not facts["notes"]:
+        notes.config(text="\n".join(f"  •  {r}" for r in lines))
+        if not lines:
             frame.pack_forget()
         elif not frame.winfo_manager():
             frame.pack(anchor="w", fill="x")
@@ -1573,6 +1611,7 @@ class OSRSTrackerApp:
         if latest and latest.get("high"):
             self._search_shown["price_data"] = latest
         self._show_search_prices()
+        self._show_search_notes()
         self._render_search_volume()
 
     def _render_result(self, item, price_data, trend, facts):
@@ -1850,7 +1889,8 @@ class OSRSTrackerApp:
         if capital is not None:    # otherwise keep the last good numbers
             self.flip_results = analyzer.find_flips(
                 latest, bulk, self.item_data, capital=capital,
-                membership=self._flip_membership(), bulk_5m=bulk_5m)
+                membership=self._flip_membership(), bulk_5m=bulk_5m,
+                recent_prices=self._volume.recent_prices)
             self._order_flips()
         self._render_fliprec_table()
         self._redraw_volatile()
@@ -1873,11 +1913,11 @@ class OSRSTrackerApp:
             latest, bulk, self.item_data,
             capital=self._flip_capital() or 0,
             membership=self._flip_membership(), now=fetched_at,
-            bulk_5m=bulk_5m)
+            bulk_5m=bulk_5m, recent_prices=self._volume.recent_prices)
         threshold = self._alert_threshold()
         return db.sync_profit_alerts(
             [r for r in rows
-             if r["active"] and not r["slow"] and r["verdict"] != "Suspect"
+             if analyzer.alert_worthy(r)
              and r["profit"] >= threshold
              and r["item_id"] not in self._ignored],
             ALERT_COOLDOWN, fetched_at)
@@ -1997,7 +2037,8 @@ class OSRSTrackerApp:
                 row = analyzer.flip_row(by_id[item_id], lt,
                                         bulk.get(str(item_id)), capital,
                                         now=fetched_at,
-                                        avg_5m=bulk_5m.get(str(item_id)))
+                                        avg_5m=bulk_5m.get(str(item_id)),
+                                        recent_prices=self._volume.recent_prices)
                 if row:        # None if a side has no price yet
                     row["vol_12h"] = self._volume.slower_side(item_id, 12 * 3600)
                     row["vol_24h"] = self._volume.slower_side(item_id, 24 * 3600)
@@ -2022,7 +2063,8 @@ class OSRSTrackerApp:
                 cells["verdict"] = ("⚠ Inactive" if not row["active"]
                                     else row["verdict"])
                 tag = {"Profitable": "good", "Marginal": "warn",
-                       "Suspect": "warn", "Unprofitable": "bad"}.get(
+                       "Unsteady": "warn", "Suspect": "warn",
+                       "Unprofitable": "bad"}.get(
                            row["verdict"], "dim")
             if hit_below or hit_above:
                 tag = "target"
@@ -2825,7 +2867,7 @@ class OSRSTrackerApp:
         ("tax",     "GE tax",      "tax",       64,  "e",      True),
         ("limit",   "4h limit",    "limit",     72,  "e",      True),
         ("verdict", "Verdict",     "verdict",   80,  "center", True),
-        ("signal",  "Note",        "reversion", 165, "w",      False),
+        ("signal",  "Note",        "reversion", 250, "w",      False),
     ]
 
     def _build_fliprec_tab(self) -> ttk.Frame:
@@ -2856,8 +2898,8 @@ class OSRSTrackerApp:
         ttk.Label(bar, text="Show:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         # Its own setting, so going back to v1.4 still finds its old one.
-        shows = ["Alerts", "All verdicts", "Profitable", "Marginal", "Suspect",
-                 "Inactive"]
+        shows = ["Alerts", "All verdicts", "Profitable", "Marginal", "Unsteady",
+                 "Suspect", "Inactive"]
         show = prefs.get("flip_show")
         self.flip_show_var = tk.StringVar(
             value=show if show in shows else "Alerts")
@@ -2961,7 +3003,7 @@ class OSRSTrackerApp:
         if key is None:
             return
         if key == "verdict":
-            # Rank, not alphabetical: ▼ = Profitable, Marginal, Suspect,
+            # Rank, not alphabetical: ▼ = Profitable, Marginal, Unsteady, Suspect,
             # Inactive; ▲ reverses it. Ties keep the best profit first.
             self.flip_results.sort(key=lambda r: -(r["profit"] or r["net"]))
             self.flip_results.sort(
@@ -3036,14 +3078,17 @@ class OSRSTrackerApp:
 
         fmt = self._price_fmt()
         for r in rows:
-            tag = {"Profitable": "good", "Marginal": "warn", "Suspect": "warn"}.get(
-                r["verdict"], "dim")
+            tag = {"Profitable": "good", "Marginal": "warn", "Unsteady": "warn",
+                   "Suspect": "warn"}.get(r["verdict"], "dim")
             verdict = "⚠ Inactive" if not r["active"] else r["verdict"]
             sig = r["reversion"]
             if sig:
                 sig = f"{sig} ({r['reversion_pct']:+.1f}%)"
             if not r["backed_5m"]:
                 sig = f"5m margin only {fmt(r['net_5m'])}"
+            elif r["verdict"] == "Unsteady":
+                sig = (f"Margin held {r['margin_held']}% of 2h, "
+                       f"usually {fmt(r['typical_margin'])}")
             cells = self._shared_cells(r, fmt)
             cells.update(net=fmt(r["net"]), tax=fmt(r["tax"]),
                          limit=fmt(r["limit"]) if r["limit"] else "?",
@@ -3725,6 +3770,11 @@ class OSRSTrackerApp:
                     "Something went wrong while asking the AI. The details "
                     "were saved to the log file.\n", "error")
                 return
+            if result["prices_at"]:
+                checked = time.strftime("%H:%M:%S",
+                                        time.localtime(result["prices_at"]))
+                self._ai_write(f"Prices checked {checked}. They can move before "
+                               "you buy, so ask again for new numbers.\n", "note")
             if result["notice"]:
                 self._ai_write(result["notice"] + "\n", "note")
             self.ai_status.set(f"Used {result['tokens']:,} tokens."
@@ -3752,11 +3802,13 @@ class OSRSTrackerApp:
         self._ai_write(AI_INTRO + "\n", "note")
 
     def _update_ai_instructions_btn(self):
+        changed = self._ai_instructions not in ("", ai.DEFAULT_INSTRUCTIONS)
         self.ai_instructions_btn.config(
-            text="Instructions ✓" if self._ai_instructions else "Instructions…")
+            text="Instructions ✓" if changed else "Instructions…")
 
     def _ai_instructions_dialog(self):
-        """Dialog to write the standing instructions sent with every question."""
+        """Dialog to see and change the instructions sent with every question,
+        and to read the built-in rules that go with them."""
         saved = self._ai_instructions
 
         dlg = tk.Toplevel(self.root)
@@ -3770,15 +3822,18 @@ class OSRSTrackerApp:
         ttk.Label(body, text="Instructions for the AI", style="Header.TLabel"
                   ).pack(anchor="w", pady=(0, 10))
         ttk.Label(body, wraplength=560, justify="left", text=(
-            "These go with every question, so answers come back the way you "
-            "want. Use them for layout, tone, length and what to include. They "
-            "can't change the app's data, and the AI may not follow them "
-            "perfectly.")).pack(anchor="w", pady=(0, 10))
+            "These go with every question, starting with the app's defaults. "
+            "Change them to get answers the way you want, such as layout, tone, "
+            "length and what to include. They can't change the app's data, and "
+            "the AI may not follow them perfectly.")).pack(anchor="w", pady=(0, 10))
 
         box = self._input_box(scrolledtext.ScrolledText, body, width=68, height=12)
         box.pack(fill="x")
         box.insert("1.0", saved)
         box.focus_set()
+        rules = self._input_box(scrolledtext.ScrolledText, body, width=68, height=12)
+        rules.insert("1.0", ai.SYSTEM_PROMPT)
+        rules.config(state="disabled")
 
         tools = ttk.Frame(body)
         tools.pack(fill="x", pady=(6, 0))
@@ -3802,10 +3857,29 @@ class OSRSTrackerApp:
             box.delete("1.0", "end")
             show_count()
 
-        ttk.Button(tools, text="Add an example", style="Range.TButton",
-                   command=add_example).pack(side="left", padx=(0, 6))
-        ttk.Button(tools, text="Clear", style="Range.TButton",
-                   command=clear).pack(side="left")
+        def reset():
+            box.delete("1.0", "end")
+            box.insert("1.0", ai.DEFAULT_INSTRUCTIONS)
+            show_count()
+
+        def toggle_rules():
+            viewing = rules_btn.cget("text") == "View built-in rules"
+            (box if viewing else rules).pack_forget()
+            (rules if viewing else box).pack(fill="x", before=tools)
+            rules_btn.config(text="Back to your instructions" if viewing
+                             else "View built-in rules")
+            for button in editing:
+                button.config(state="disabled" if viewing else "normal")
+
+        editing = [ttk.Button(tools, text=text, style="Range.TButton", command=action)
+                   for text, action in (("Add an example", add_example),
+                                        ("Clear", clear),
+                                        ("Reset to default", reset))]
+        for button in editing:
+            button.pack(side="left", padx=(0, 6))
+        rules_btn = ttk.Button(tools, text="View built-in rules",
+                               style="Range.TButton", command=toggle_rules)
+        rules_btn.pack(side="left")
         box.bind("<KeyRelease>", show_count)
         show_count()
 
@@ -3836,7 +3910,7 @@ class OSRSTrackerApp:
             if text != saved:
                 try:
                     self._settings_saved(
-                        settings.save({"ai_instructions": text}))
+                        settings.save({"ai_standing_instructions": text}))
                 except OSError:
                     error.set("Couldn't save your instructions, so nothing "
                               "changed. Check that the data folder isn't "

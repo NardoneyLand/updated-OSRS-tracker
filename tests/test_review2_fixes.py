@@ -31,6 +31,12 @@ class StubTools:
     def __init__(self):
         self.calls = []
 
+    def new_question(self):
+        pass
+
+    def prices_checked_at(self):
+        return None
+
     def run(self, name, args):
         self.calls.append(name)
         return {"ok": True}

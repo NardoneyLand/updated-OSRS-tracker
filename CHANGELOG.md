@@ -3,6 +3,26 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.0 — 2026-11-02
+
+**New**
+- A new verdict, Unsteady, marks a flip whose margin was positive in under 80% of the
+  last 2 hours of 5-minute prices, so the margin on screen may be a brief high. It
+  appears on FlipRec and the Watchlist, with the Note column showing how often the
+  margin held and its usual size, and as a note on Search. Unsteady flips still alert,
+  and you can pick the verdict under Show.
+- Ask AI has default instructions you can read and change, and a Reset to default
+  button. Anything you saved before stays, after the defaults. View built-in rules
+  shows the rest of what the AI is told.
+- A line under each Ask AI answer says when its prices were checked.
+
+**Changed**
+- Ask AI's flip search follows the same rules as alerts. It skips Suspect flips and
+  flips with a side idle over 5 minutes unless you ask for them, and it warns about
+  Unsteady ones.
+- Each Ask AI question starts with new prices, rather than reusing any up to a minute
+  old. On a follow-up, the AI is reminded that earlier numbers may be out of date.
+
 ## 1.5.0 — 2026-11-02
 
 **Changed**

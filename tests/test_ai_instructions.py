@@ -40,6 +40,12 @@ class NoTools:
     def run(self, name, args):
         return {}
 
+    def new_question(self):
+        pass
+
+    def prices_checked_at(self):
+        return None
+
 
 def anthropic_reply(text="ok"):
     return [F.msg_start()] + F.a_text(0, text) + F.msg_end("end_turn")
@@ -172,17 +178,17 @@ def scenario():
         app.notebook.select(app.ai_tab)
         settle(lambda: False, 0.2)
 
-        check(app.ai_instructions_btn.cget("text") == "Instructions…", "the button starts with none saved")
+        check(app.ai_instructions_btn.cget("text") == "Instructions…", "the button has no tick on the defaults")
         body = ask("first")
-        check(body["system"] == ai.SYSTEM_PROMPT, "with none saved the AI gets the normal prompt")
+        check(body["system"] == ai.system_prompt(ai.DEFAULT_INSTRUCTIONS), "with none saved the AI gets the defaults")
 
         # Cancel and Escape save nothing
         dlg = open_dialog()
-        check(dlg.winfo_exists() and text_box(dlg).get("1.0", "end").strip() == "", "the box starts empty")
+        check(dlg.winfo_exists() and text_box(dlg).get("1.0", "end").strip() == ai.DEFAULT_INSTRUCTIONS, "the box starts with the defaults")
         text_box(dlg).insert("1.0", "not saved")
         button(dlg, "Cancel").invoke()
         root.update()
-        check(not dlg.winfo_exists() and app._ai_instructions == "", "Cancel saves nothing")
+        check(not dlg.winfo_exists() and app._ai_instructions == ai.DEFAULT_INSTRUCTIONS, "Cancel saves nothing")
 
         # Saving
         save_text(f"  {RULES}\n\n")
@@ -207,7 +213,8 @@ def scenario():
         check(len(ask("fourth")["messages"]) == 5, "and keeps the conversation")
 
         # They survive a restart
-        check(settings.load()["ai_instructions"] == RULES, "saved to settings")
+        check(settings.load()["ai_standing_instructions"] == RULES, "saved to settings")
+        check("ai_instructions" not in settings.load(), "and the older setting isn't written")
 
         # Add an example never overwrites
         dlg = open_dialog()
@@ -219,6 +226,27 @@ def scenario():
         button(dlg, "Clear").invoke()
         button(dlg, "Add an example").invoke()
         check(text_box(dlg).get("1.0", "end").strip() == gui.AI_INSTRUCTIONS_EXAMPLE, "Add an example fills an empty box")
+
+        # Reset to default replaces the box, and only Save keeps it
+        button(dlg, "Reset to default").invoke()
+        check(text_box(dlg).get("1.0", "end").strip() == ai.DEFAULT_INSTRUCTIONS, "Reset to default restores the defaults")
+
+        # The built-in rules can be read but not changed
+        view = button(dlg, "View built-in rules")
+        add = button(dlg, "Add an example")
+        boxes = [w for w in dlg.winfo_children()[0].winfo_children() if isinstance(w, tk.Frame) and any(isinstance(c, tk.Text) for c in w.winfo_children())]
+        rules = next(c for f in boxes for c in f.winfo_children() if isinstance(c, tk.Text) and c is not text_box(dlg))
+        check(not rules.frame.winfo_manager(), "the rules start hidden")
+        view.invoke()
+        root.update()
+        check(rules.frame.winfo_manager() == "pack" and not text_box(dlg).frame.winfo_manager(), "View built-in rules swaps them in")
+        check(rules.get("1.0", "end").strip() == ai.SYSTEM_PROMPT and rules.cget("state") == "disabled", "showing the real prompt, read-only")
+        check(str(add.cget("state")) == "disabled", "the edit buttons are off while viewing")
+        check(view.cget("text") == "Back to your instructions", "the button offers the way back")
+        view.invoke()
+        root.update()
+        check(not rules.frame.winfo_manager() and text_box(dlg).frame.winfo_manager() == "pack", "and it swaps back")
+        check(str(add.cget("state")) == "normal" and view.cget("text") == "View built-in rules", "with the buttons back on")
 
         # Too long is refused, and the count says why
         box = text_box(dlg)
@@ -246,9 +274,14 @@ def scenario():
         check(body["system"] == ai.SYSTEM_PROMPT and len(body["messages"]) == 1, "the AI goes back to the normal prompt")
 
         # What's in the settings file at launch
-        check(gui.saved_ai_instructions({}) == "", "no setting, no instructions")
-        check(gui.saved_ai_instructions({"ai_instructions": f"  {RULES} "}) == RULES, "a saved setting loads, trimmed")
-        check(gui.saved_ai_instructions({"ai_instructions": 123}) == "", "a hand-edited setting that isn't text is ignored")
+        check(gui.saved_ai_instructions({}) == ai.DEFAULT_INSTRUCTIONS, "no setting, the defaults")
+        check(gui.saved_ai_instructions({"ai_standing_instructions": f"  {RULES} "}) == RULES, "a saved setting loads, trimmed")
+        check(gui.saved_ai_instructions({"ai_standing_instructions": ""}) == "", "clearing them sticks")
+        check(gui.saved_ai_instructions({"ai_instructions": f"  {RULES} "}) == ai.DEFAULT_INSTRUCTIONS + "\n\n" + RULES, "older instructions come after the defaults")
+        check(gui.saved_ai_instructions({"ai_instructions": "", "ai_standing_instructions": RULES}) == RULES, "the new setting wins")
+        check(gui.saved_ai_instructions({"ai_instructions": ""}) == ai.DEFAULT_INSTRUCTIONS, "older empty instructions just get the defaults")
+        check(gui.saved_ai_instructions({"ai_standing_instructions": 5}) == ai.DEFAULT_INSTRUCTIONS, "a value that isn't text is ignored")
+        check(gui.saved_ai_instructions({"ai_instructions": 123}) == ai.DEFAULT_INSTRUCTIONS, "a hand-edited setting that isn't text is ignored")
         over = gui.saved_ai_instructions({"ai_instructions": "x" * 200_000})
         check(len(over) == ai.MAX_INSTRUCTIONS, f"a hand-edited setting can't pass the limit: {len(over)}")
 

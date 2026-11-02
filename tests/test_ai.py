@@ -40,7 +40,7 @@ LATEST = {"1": {"high": 2_000_000, "low": 1_900_000, "highTime": now-30, "lowTim
           "2": {"high": 200, "low": 180, "highTime": now-30, "lowTime": now-40},
           "3": {"high": 500, "low": 100, "highTime": now-9000, "lowTime": now-9000}}
 BULK = {"1": {"avgHighPrice": 1_990_000, "avgLowPrice": 1_910_000, "highPriceVolume": 500, "lowPriceVolume": 400},
-        "2": {"avgHighPrice": 185, "avgLowPrice": 175, "highPriceVolume": 50000, "lowPriceVolume": 40000},
+        "2": {"avgHighPrice": 195, "avgLowPrice": 180, "highPriceVolume": 50000, "lowPriceVolume": 40000},
         "3": {"avgHighPrice": 400, "avgLowPrice": 150, "highPriceVolume": 1, "lowPriceVolume": 1}}
 TS = [{"timestamp": int(now) - 3600*(400-i), "avgHighPrice": 1_800_000+i*500, "avgLowPrice": 1_750_000+i*500,
        "highPriceVolume": 10, "lowPriceVolume": 9} for i in range(365)]
@@ -108,7 +108,7 @@ F.SCRIPTS["anthropic"] = [[F.msg_start()] + F.a_text(0, "ok") + F.msg_end("end_t
 send(chat, "and?")
 after = F.REQUESTS[-1]["body"]["messages"]
 assert json.dumps(after[:3]) == json.dumps(second["messages"][:3]), "history prefix changed"
-assert len(after) == 5 and after[4] == {"role": "user", "content": "and?"}
+assert len(after) == 5 and after[4]["role"] == "user" and after[4]["content"].startswith("and?")
 
 # Haiku: no fallback params
 F.SCRIPTS["anthropic"] = [[F.msg_start()] + F.a_text(0, "hi") + F.msg_end("end_turn")]

@@ -2,7 +2,8 @@
 analyzer.py — Trend analysis, market facts, and flip/profit maths.
 """
 
-from typing import List, Optional, Tuple
+import statistics
+from typing import Callable, List, Optional, Tuple
 
 
 # ── Trend ─────────────────────────────────────────────────────────────────────
@@ -253,6 +254,9 @@ FLIP_MAX_ROI = 40.0           # above this the margin is probably not real
 FLIP_MIN_5M_SUPPORT = 0.5     # the 5m averages must back up this share of the
                               # margin. In practice real margins sit near 100%
                               # and one-off trades at 0% or below.
+FLIP_MIN_MARGIN_HELD = 80     # % of recent 5m periods the margin must have been
+                              # positive in, or the flip is marked "Unsteady"
+FLIP_HELD_MIN_PERIODS = 6     # fewer periods with both sides priced proves nothing
 FLIP_MIN_SIDE_VOLUME = 10     # min items traded per side in the last hour
 VOLUME_PACE_UP = 3.0          # the last hour vs an average hour over the day
 VOLUME_PACE_DOWN = 0.5
@@ -260,8 +264,8 @@ REVERSION_THRESHOLD = 3.0     # % away from the 1h average to flag
 REVERSION_EXTREME = 25.0      # beyond this, treat as possible manipulation
 
 # Best verdict first when sorting (higher = better).
-VERDICT_RANK = {"Profitable": 3, "Marginal": 2, "Suspect": 1, "Inactive": 0,
-                "Unprofitable": -1}
+VERDICT_RANK = {"Profitable": 4, "Marginal": 3, "Unsteady": 2, "Suspect": 1,
+                "Inactive": 0, "Unprofitable": -1}
 
 
 def ge_tax(sell_price: int, exempt: bool = False) -> int:
@@ -354,25 +358,49 @@ def margin_at_5m_prices(avg_5m: Optional[dict], buy: int, sell: int, net: int,
     return net_5m, net <= 0 or net_5m >= net * FLIP_MIN_5M_SUPPORT
 
 
+def margin_history(prices: List[Tuple[int, int]],
+                   exempt: bool = False) -> Tuple[Optional[int], Optional[int]]:
+    """
+    How a margin has behaved, from (average high, average low) price pairs:
+    the % of periods it was positive after tax, and its median. (None, None) if
+    there are too few periods to tell.
+    """
+    margins = [high - ge_tax(high, exempt) - low for high, low in prices or []]
+    if len(margins) < FLIP_HELD_MIN_PERIODS:
+        return None, None
+    return (sum(m > 0 for m in margins) * 100 // len(margins),
+            statistics.median_low(margins))
+
+
+def alert_worthy(row: dict) -> bool:
+    """A flip recent and believable enough to alert on or for Ask AI to offer.
+    Unsteady flips pass: they stay in view, marked by their verdict."""
+    return row["active"] and not row["slow"] and row["verdict"] != "Suspect"
+
+
 def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
              now: Optional[float] = None,
-             avg_5m: Optional[dict] = None) -> Optional[dict]:
+             avg_5m: Optional[dict] = None,
+             recent_prices: Optional[Callable] = None) -> Optional[dict]:
     """
     Flip stats for one item, profitable or not (used by FlipRec, Alerts and
     the Watchlist). `lt` is the item's /latest entry, `avg` its /1h entry,
-    `avg_5m` its /5m entry if known. Returns None if either side has no price.
+    `avg_5m` its /5m entry if known, and `recent_prices(item_id)` gives its
+    recent 5m average prices if known. Returns None if either side has no price.
 
     Buys at the latest instant-sell price (`low`) and sells at the latest
     instant-buy price (`high`), minus the GE tax: the same numbers an in-game
     margin check gives. The averages are used only for volume and as a sanity
     check: one odd trade shows up as a huge ROI, an extreme move vs the 1h
     average or a margin the 5m averages don't back up, and is marked 'Suspect'.
+    A margin that often wasn't there over the recent 5m periods is 'Unsteady'.
 
     Keys: item_id, name, buy, sell, tax, net, roi, limit, qty, cost, profit,
     volume (min per-side 1h volume), age (seconds since the older side last
     traded), traded_at (when that was), slow (active, but a side idle >
     FLIP_SLOW_AGE), active, affordable, verdict, reversion, reversion_pct,
-    net_5m (the margin at 5m average prices, None without 5m data), backed_5m.
+    net_5m (the margin at 5m average prices, None without 5m data), backed_5m,
+    margin_held and typical_margin (see margin_history; None if not worked out).
     """
     import time as _time
     now = now if now is not None else _time.time()
@@ -421,6 +449,11 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
 
     net_5m, backed_5m = margin_at_5m_prices(avg_5m, buy, sell, net, exempt)
 
+    margin_held, typical_margin = None, None
+    if recent_prices and active and net > 0:
+        margin_held, typical_margin = margin_history(
+            recent_prices(item_id), exempt)
+
     if not active:
         verdict = "Inactive"
     elif net <= 0:
@@ -428,6 +461,8 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
     elif (roi > FLIP_MAX_ROI or reversion.startswith("Extreme")
           or not backed_5m):
         verdict = "Suspect"   # too good to be true / possible manipulation
+    elif margin_held is not None and margin_held < FLIP_MIN_MARGIN_HELD:
+        verdict = "Unsteady"  # real right now, but often gone
     elif roi >= FLIP_MIN_ROI and volume >= FLIP_MIN_SIDE_VOLUME:
         verdict = "Profitable"
     else:
@@ -444,6 +479,7 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
         "affordable": affordable, "verdict": verdict,
         "reversion": reversion, "reversion_pct": round(rev_pct, 1),
         "net_5m": net_5m, "backed_5m": backed_5m,
+        "margin_held": margin_held, "typical_margin": typical_margin,
     }
 
 
@@ -456,6 +492,7 @@ def find_flips(
     now: Optional[float] = None,
     top_n: int = 0,                # 0 = return everything
     bulk_5m: Optional[dict] = None,
+    recent_prices: Optional[Callable] = None,
 ) -> list:
     """
     All items with a positive after-tax margin that you can afford at least
@@ -475,7 +512,7 @@ def find_flips(
         if not lt:
             continue
         row = flip_row(item, lt, bulk_1h.get(item_id), capital, now,
-                       bulk_5m.get(item_id))
+                       bulk_5m.get(item_id), recent_prices)
         if row and row["net"] > 0 and row["affordable"]:
             results.append(row)
 

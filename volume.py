@@ -38,6 +38,7 @@ WINDOWS = (("1h", HOUR), ("12h", 12 * HOUR), ("24h", 24 * HOUR))
 KEEP = {"5m": 26, "1h": 25}
 UPDATE_EVERY = 60          # seconds between looking for new periods
 BACKFILL_PAUSE = 1.0       # seconds between requests, to go easy on the Wiki
+RECENT_PRICE_PERIODS = 24  # two hours of five-minute periods, for recent_prices()
 
 # How long ago a window may have ended and still count as current. The margin
 # check uses the 5-minute view, so old averages there would mark good margins
@@ -119,6 +120,7 @@ class VolumeHistory:
         self._on_change = on_change
         self._buckets = {"5m": {}, "1h": {}}   # step -> {start: trimmed data}
         self._views = {}                       # seconds -> (view, end, partial)
+        self._recent = ([], 0)                 # (newest 5m periods, their end)
         self._fallbacks = {}                   # step -> (data, asked_at, got_at)
 
     # ── Reading ───────────────────────────────────────────────────────────────
@@ -161,6 +163,21 @@ class VolumeHistory:
                 cached, got_at = fresh, now
             self._fallbacks[step] = (cached, now, got_at)
         return cached if now - got_at <= keep else {}
+
+    def recent_prices(self, item_id) -> List[Tuple[int, int]]:
+        """(average high, average low) for each of the last 2 hours' 5-minute
+        periods where both sides traded. Empty if those periods are out of date.
+        Reads _recent only once, as _current does with _views."""
+        periods, end = self._recent
+        if time.time() - end > MAX_END_AGE[HOUR]:
+            return []
+        key = str(item_id)
+        prices = []
+        for period in periods:
+            entry = period.get(key)
+            if entry and entry[2] and entry[3]:
+                prices.append((entry[2], entry[3]))
+        return prices
 
     def sides(self, item_id, seconds: int) -> Optional[Tuple[int, int]]:
         """(instant buys, instant sells) in a window. None = window not ready;
@@ -301,6 +318,8 @@ class VolumeHistory:
                     add(seconds, [fives[s] for s in tail]
                         + [hours[s] for s in hour_run[:need]], end)
         self._views = views
+        self._recent = ([fives[s] for s in five_run[:RECENT_PRICE_PERIODS]],
+                        five_run[0] + FIVE_MIN if five_run else 0)
 
     def _notify(self) -> None:
         if self._on_change:

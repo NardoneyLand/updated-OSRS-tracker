@@ -24,7 +24,7 @@ HISTORY_STEP = "1h"
 MOVER_WINDOWS = ("5m", "1h", "6h", "24h")
 MOVER_POOL = 500           # biggest moves to filter down from
 MEMBERSHIPS = ("all", "members", "f2p")
-VERDICTS = ("Profitable", "Marginal", "Suspect", "Inactive")
+VERDICTS = ("Profitable", "Marginal", "Unsteady", "Suspect", "Inactive")
 ITEM_MATCH_MIN_SCORE = 0.35   # "whip" should still find "Abyssal whip"
 SETTING_MEMBERSHIP = {"Members only": "members", "F2P only": "f2p"}
 SORT_KEYS = ("profit", "roi", "net", "volume")
@@ -33,10 +33,12 @@ TOOLS = [
     {
         "name": "get_flips",
         "description": (
-            "Search the live Grand Exchange for profitable flips, using the "
-            "same maths and verdicts as the FlipRec tab. Defaults to the "
-            "user's own capital and membership filter. Results are best "
-            "first unless sort_by is given."),
+            "Search the Grand Exchange for profitable flips, using the same "
+            "maths and verdicts as the FlipRec tab. Defaults to the user's own "
+            "capital and membership filter. Like the user's alerts, it leaves "
+            "out Suspect flips and flips with a side idle over 5 minutes, and "
+            "left_out says how many. Results are best first unless sort_by is "
+            "given."),
         "schema": {
             "type": "object",
             "properties": {
@@ -47,8 +49,12 @@ TOOLS = [
                                            "Defaults to the user's capital."},
                 "membership": {"type": "string", "enum": list(MEMBERSHIPS)},
                 "verdict": {"type": "string", "enum": list(VERDICTS),
-                            "description": "Inactive items are left out "
-                                           "unless this asks for them."},
+                            "description": "Suspect and Inactive items are "
+                                           "left out unless this asks for them."},
+                "include_slow": {"type": "boolean",
+                                 "description": "Also return flips with a side "
+                                                "idle over 5 minutes. Only when "
+                                                "the user asks for them."},
                 "name_contains": {"type": "string",
                                   "description": "Only item names containing "
                                                  "this text."},
@@ -169,6 +175,29 @@ def _user_membership() -> str:
     return SETTING_MEMBERSHIP.get(settings.load().get("flip_membership"), "all")
 
 
+def _clock(timestamp: float) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(timestamp))
+
+
+def _unsteady_warning(held: int, typical: int) -> str:
+    return (f"The margin was positive in only {held}% of the last 2 hours' "
+            f"5-minute averages, and is usually {typical} gp.")
+
+
+def _flip_warning(row: dict) -> Optional[str]:
+    """Written here, not left to the model, so every model gets the same one."""
+    warnings = []
+    if row["verdict"] == "Unsteady":
+        warnings.append(_unsteady_warning(row["margin_held"],
+                                          row["typical_margin"]))
+    elif row["verdict"] == "Suspect":
+        warnings.append("This margin may not be real.")
+    if row["slow"]:
+        warnings.append("A side last traded over 5 minutes ago, so the margin "
+                        "may have moved.")
+    return " ".join(warnings) or None
+
+
 def _flip_summary(row: dict) -> dict:
     return {
         "name": row["name"], "buy": row["buy"], "sell": row["sell"],
@@ -180,6 +209,9 @@ def _flip_summary(row: dict) -> dict:
         "price_vs_1h_avg": row["reversion"], "pct_vs_1h_avg": row["reversion_pct"],
         "margin_at_5m_avg_prices": row["net_5m"],
         "margin_backed_by_5m_avg": row["backed_5m"],
+        "margin_held_pct": row["margin_held"],
+        "typical_margin": row["typical_margin"],
+        "warning": _flip_warning(row),
     }
 
 
@@ -192,7 +224,22 @@ class MarketTools:
         # Without a running history, averages() asks the Wiki directly.
         self._history = history or volume.VolumeHistory()
         self._market = None        # (latest, bulk_1h, fetched_at, bulk_5m)
+        self._checked_at = None    # when this question's oldest prices were fetched
         self._lock = threading.Lock()
+
+    def new_question(self) -> None:
+        """Each question starts from new prices. Lookups within one question
+        share them, so its numbers agree with each other."""
+        with self._lock:
+            self._market = None
+            self._checked_at = None
+
+    def prices_checked_at(self) -> Optional[float]:
+        """When this question's prices were fetched. None if it used none."""
+        return self._checked_at
+
+    def _note_prices(self, fetched_at: float) -> None:
+        self._checked_at = min(self._checked_at or fetched_at, fetched_at)
 
     def run(self, name: str, args) -> dict:
         """Run one tool. Failures come back as {'error': ...} for the model."""
@@ -241,6 +288,7 @@ class MarketTools:
         with self._lock:
             if (self._market
                     and time.time() - self._market[2] < MARKET_MAX_AGE):
+                self._note_prices(self._market[2])
                 return self._market
             latest = api.get_all_latest_prices()
             bulk = self._history.averages("1h")
@@ -248,6 +296,7 @@ class MarketTools:
                 raise ToolError("Could not fetch live prices from the OSRS Wiki.")
             bulk_5m = self._history.averages("5m")
             self._market = (latest, bulk, time.time(), bulk_5m)
+            self._note_prices(self._market[2])
             return self._market
 
     # ── Tools ─────────────────────────────────────────────────────────────────
@@ -264,15 +313,11 @@ class MarketTools:
         latest, bulk, fetched_at, bulk_5m = self._latest_market()
         rows = analyzer.find_flips(latest, bulk, self._mapping(),
                                    capital=capital, membership=membership,
-                                   bulk_5m=bulk_5m)
+                                   bulk_5m=bulk_5m,
+                                   recent_prices=self._history.recent_prices)
         ignored = db.ignored_ids()
         rows = [r for r in rows if r["item_id"] not in ignored]
 
-        verdict = _choice(args, "verdict", VERDICTS)
-        if verdict:
-            rows = [r for r in rows if r["verdict"] == verdict]
-        else:
-            rows = [r for r in rows if r["active"]]
         needle = args.get("name_contains")
         if isinstance(needle, str) and needle.strip():
             needle = needle.strip().lower()
@@ -283,6 +328,20 @@ class MarketTools:
         min_volume = _bounded_int(args, "min_volume", 0, 0, 10**9)
         if min_volume:
             rows = [r for r in rows if r["volume"] >= min_volume]
+
+        # The same rules as alerts, unless the question asks for the others.
+        verdict = _choice(args, "verdict", VERDICTS)
+        left_out = {"suspect": 0, "side_idle_over_5_min": 0}
+        if verdict:
+            rows = [r for r in rows if r["verdict"] == verdict]
+        else:
+            rows = [r for r in rows if r["active"]]
+            left_out["suspect"] = sum(r["verdict"] == "Suspect" for r in rows)
+            rows = [r for r in rows if r["verdict"] != "Suspect"]
+        if verdict != "Suspect" and args.get("include_slow") is not True:
+            left_out["side_idle_over_5_min"] = sum(r["slow"] for r in rows)
+            rows = [r for r in rows if not r["slow"]]
+
         sort_by = _choice(args, "sort_by", SORT_KEYS)
         if sort_by:
             rows = sorted(rows, key=lambda r: r[sort_by], reverse=True)
@@ -290,8 +349,9 @@ class MarketTools:
         limit = _bounded_int(args, "limit", 20, 1, 50)
         return {
             "prices_age_seconds": int(time.time() - fetched_at),
+            "prices_checked_at": _clock(fetched_at),
             "capital_used_gp": capital, "membership": membership,
-            "matching_items": len(rows),
+            "matching_items": len(rows), "left_out": left_out,
             "flips": [_flip_summary(r) for r in rows[:limit]],
         }
 
@@ -310,7 +370,8 @@ class MarketTools:
         lt = latest.get(str(item_id))
         row = (analyzer.flip_row(item, lt, bulk.get(str(item_id)),
                                  _user_capital(),
-                                 avg_5m=bulk_5m.get(str(item_id)))
+                                 avg_5m=bulk_5m.get(str(item_id)),
+                                 recent_prices=self._history.recent_prices)
                if lt else None)
 
         points = api.get_timeseries(item_id, timestep=HISTORY_STEP)
@@ -329,6 +390,7 @@ class MarketTools:
             "high_alch": item.get("highalch"),
             "examine": item.get("examine"),
             "prices_age_seconds": int(time.time() - fetched_at),
+            "prices_checked_at": _clock(fetched_at),
             "flip": _flip_summary(row) if row else None,
             "history": _history_summary(points),
             "units_traded": self._traded(item_id),
@@ -351,6 +413,9 @@ class MarketTools:
         bulk = self._history.averages(window)
         if not latest or not bulk:
             raise ToolError("Could not fetch live prices from the OSRS Wiki.")
+        fetched_at = time.time()
+        with self._lock:
+            self._note_prices(fetched_at)
         rows = analyzer.find_volatile_items(latest, bulk, self._mapping(),
                                             min_volume=1000, top_n=MOVER_POOL)
         ignored = db.ignored_ids()
@@ -363,6 +428,7 @@ class MarketTools:
         limit = _bounded_int(args, "limit", 20, 1, 50)
         return {
             "window": window,
+            "prices_checked_at": _clock(fetched_at),
             "movers": [{
                 "name": r["name"], "current_mid": r["current"],
                 "window_avg_mid": r["avg"], "pct_change": r["pct_change"],
@@ -384,7 +450,8 @@ class MarketTools:
                 item = by_id.get(item_id)
                 row = (analyzer.flip_row(item, lt, bulk.get(str(item_id)),
                                          capital,
-                                         avg_5m=bulk_5m.get(str(item_id)))
+                                         avg_5m=bulk_5m.get(str(item_id)),
+                                         recent_prices=self._history.recent_prices)
                        if lt and item else None)
                 entry = (_flip_summary(row) if row
                          else {"name": item_name, "verdict": "No price"})
@@ -398,12 +465,13 @@ class MarketTools:
                         time.time()))
                 watchlist.append(entry)
         now = time.time()
-        return {
-            "capital_gp": capital,
-            "capital_set": capital > 0,
-            "membership": _user_membership(),
-            "watchlist": watchlist,
-            "active_alerts": [{
+        alerts = []
+        for a in db.get_active_alerts():
+            held, typical = analyzer.margin_history(
+                self._history.recent_prices(a["item_id"]),
+                a["item_name"] in analyzer.GE_TAX_EXEMPT_NAMES)
+            unsteady = held is not None and held < analyzer.FLIP_MIN_MARGIN_HELD
+            alerts.append({
                 "name": a["item_name"], "buy": a["buy"], "sell": a["sell"],
                 "margin_after_tax": a["net"], "qty": a["qty"],
                 "total_cost": a["cost"],
@@ -413,7 +481,15 @@ class MarketTools:
                 "prices_age_seconds": int(now - a["updated"]),
                 "last_trade_age_seconds": (int(now - a["traded_at"])
                                            if a["traded_at"] else None),
-            } for a in db.get_active_alerts()],
+                "margin_held_pct": held, "typical_margin": typical,
+                "warning": _unsteady_warning(held, typical) if unsteady else None,
+            })
+        return {
+            "capital_gp": capital,
+            "capital_set": capital > 0,
+            "membership": _user_membership(),
+            "watchlist": watchlist,
+            "active_alerts": alerts,
         }
 
     def _get_alert_history(self, args: dict) -> dict:

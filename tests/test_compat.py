@@ -14,6 +14,12 @@ class StubTools:
     def __init__(self):
         self.calls = []
 
+    def new_question(self):
+        pass
+
+    def prices_checked_at(self):
+        return None
+
     def run(self, name, args):
         self.calls.append((name, args))
         if not isinstance(args, dict):
@@ -78,7 +84,7 @@ F.SCRIPTS["compat"] = [
     [text("Buy it."), chunk(finish="stop", usage={"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25})],
 ]
 chat, out, res, tools = run()
-assert out == "Checking. Buy it." and res == {"tokens": 40, "notice": ""}, (out, res)
+assert out == "Checking. Buy it." and res == {"tokens": 40, "notice": "", "prices_at": None}, (out, res)
 assert tools.calls == [("get_item", {"name": "whip"}), ("get_news", {})], tools.calls
 body = F.REQUESTS[-1]["body"]
 assert F.REQUESTS[-1]["path"] == "/v1/chat/completions"

@@ -156,7 +156,9 @@ def scenario():
         tracker = tools.run("get_my_tracker", {})
         check(abs(tracker["active_alerts"][0]["last_trade_age_seconds"] - 30) < 5, "AI sees the alert's last trade")
         flips = {f["name"]: f for f in tools.run("get_flips", {})["flips"]}
-        check(flips["Voidwaker"]["verdict"] == "Suspect" and flips["Voidwaker"]["margin_backed_by_5m_avg"] is False, "AI sees the failed margin check")
+        check("Voidwaker" not in flips, "AI's flip search skips a failed margin check, like alerts")
+        suspect = tools.run("get_flips", {"verdict": "Suspect"})["flips"][0]
+        check(suspect["name"] == "Voidwaker" and suspect["margin_backed_by_5m_avg"] is False, "but it's there if asked for")
         check(flips["Good item"]["margin_at_5m_avg_prices"] > 0, "AI sees the 5m margin")
 
         # Age keeps counting between checks, without new data
