@@ -7,6 +7,7 @@ Arguments come from the model, so each tool checks them instead of trusting
 the schema.
 """
 
+import json
 import threading
 import time
 from typing import Callable, Optional
@@ -179,19 +180,27 @@ def _clock(timestamp: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(timestamp))
 
 
-def _unsteady_warning(held: int, typical: int) -> str:
-    return (f"The margin was positive in only {held}% of the last 2 hours' "
-            f"5-minute averages, and is usually {typical} gp.")
+def _margin_warning(held: Optional[int], typical: Optional[int],
+                    periods: Optional[int], unknown: bool) -> Optional[str]:
+    if unknown:
+        return ("The app's recent price history isn't ready, so it couldn't "
+                "check how steady this margin has been.")
+    if held is not None and held < analyzer.FLIP_MIN_MARGIN_HELD:
+        return (f"The margin was positive in only {held}% of {periods} recent "
+                f"5-minute periods, and is usually {typical} gp.")
+    return None
 
 
 def _flip_warning(row: dict) -> Optional[str]:
     """Written here, not left to the model, so every model gets the same one."""
     warnings = []
-    if row["verdict"] == "Unsteady":
-        warnings.append(_unsteady_warning(row["margin_held"],
-                                          row["typical_margin"]))
-    elif row["verdict"] == "Suspect":
+    if row["verdict"] == "Suspect":
         warnings.append("This margin may not be real.")
+    else:
+        margin = _margin_warning(row["margin_held"], row["typical_margin"],
+                                 row["margin_periods"], row["margin_unknown"])
+        if margin:
+            warnings.append(margin)
     if row["slow"]:
         warnings.append("A side last traded over 5 minutes ago, so the margin "
                         "may have moved.")
@@ -211,8 +220,60 @@ def _flip_summary(row: dict) -> dict:
         "margin_backed_by_5m_avg": row["backed_5m"],
         "margin_held_pct": row["margin_held"],
         "typical_margin": row["typical_margin"],
+        "margin_periods_checked": row["margin_periods"],
         "warning": _flip_warning(row),
     }
+
+
+def _log_row(entry: dict) -> str:
+    """One thing a lookup returned, for the log."""
+    parts = [f"  {entry.get('name')}"]
+    for label, key, unit in (("buy", "buy", ""), ("sell", "sell", ""),
+                             ("margin", "margin_after_tax", ""),
+                             ("age", "last_trade_age_seconds", "s"),
+                             ("", "verdict", ""), ("held", "margin_held_pct", "%"),
+                             ("mid", "current_mid", ""), ("avg", "window_avg_mid", ""),
+                             ("move", "pct_change", "%")):
+        if entry.get(key) is not None:
+            parts.append(f"{label} {entry[key]}{unit}".strip())
+    return " ".join(parts)
+
+
+def _log_lookup(name: str, args, result: dict) -> None:
+    """
+    Save a lookup and the numbers it returned, so a surprising answer can be
+    checked against what the AI actually saw. The question, the answer and the
+    API key never come through here.
+    """
+    if "error" in result:
+        applog.log.info(f"AI {name} {json.dumps(args, default=str)[:300]} -> "
+                        f"error: {result['error']}")
+        return
+    summary, rows = "done", []
+    if name == "get_flips":
+        out = result["left_out"]
+        summary = (f"{result['matching_items']} offered, left out {out['suspect']} "
+                   f"suspect, {out['side_idle_over_5_min']} idle")
+        rows = result["flips"]
+    elif name == "get_item":
+        summary = result["name"]
+        rows = [result["flip"]] if result["flip"] else []
+    elif name == "get_movers":
+        summary = f"{len(result['movers'])} movers over {result['window']}"
+        rows = result["movers"]
+    elif name == "get_my_tracker":
+        summary = (f"{len(result['watchlist'])} on the Watchlist, "
+                   f"{len(result['active_alerts'])} alerts")
+        rows = result["watchlist"] + result["active_alerts"]
+    elif name == "get_alert_history":
+        summary = f"{len(result['items'])} items"
+    elif name == "get_news":
+        summary = f"{len(result['news'])} headlines"
+    if result.get("prices_checked_at"):
+        summary += f", prices checked {result['prices_checked_at']}"
+    applog.log.info("\n".join(
+        [f"AI {name} {json.dumps(args, default=str)[:300]} -> {summary}"]
+        + [_log_row(row) for row in rows]))
 
 
 class MarketTools:
@@ -242,7 +303,17 @@ class MarketTools:
         self._checked_at = min(self._checked_at or fetched_at, fetched_at)
 
     def run(self, name: str, args) -> dict:
-        """Run one tool. Failures come back as {'error': ...} for the model."""
+        """Run one tool and log what it returned. A problem with the log must
+        never cost the answer."""
+        result = self._run(name, args)
+        try:
+            _log_lookup(name, args, result)
+        except Exception:
+            applog.log.warning(f"Couldn't log AI tool {name}", exc_info=True)
+        return result
+
+    def _run(self, name: str, args) -> dict:
+        """Failures come back as {'error': ...} for the model."""
         handler = {
             "get_flips": self._get_flips,
             "get_item": self._get_item,
@@ -331,16 +402,21 @@ class MarketTools:
 
         # The same rules as alerts, unless the question asks for the others.
         verdict = _choice(args, "verdict", VERDICTS)
-        left_out = {"suspect": 0, "side_idle_over_5_min": 0}
         if verdict:
             rows = [r for r in rows if r["verdict"] == verdict]
-        else:
-            rows = [r for r in rows if r["active"]]
-            left_out["suspect"] = sum(r["verdict"] == "Suspect" for r in rows)
-            rows = [r for r in rows if r["verdict"] != "Suspect"]
-        if verdict != "Suspect" and args.get("include_slow") is not True:
-            left_out["side_idle_over_5_min"] = sum(r["slow"] for r in rows)
-            rows = [r for r in rows if not r["slow"]]
+        include_slow = args.get("include_slow") is True
+        left_out = {"suspect": 0, "side_idle_over_5_min": 0}
+        offered = []
+        for row in rows:
+            reason = analyzer.why_no_alert(row)
+            if (reason is None or (reason == "side_idle" and include_slow)
+                    or (verdict and reason != "side_idle")):
+                offered.append(row)
+            elif reason == "suspect":
+                left_out["suspect"] += 1
+            elif reason == "side_idle":
+                left_out["side_idle_over_5_min"] += 1
+        rows = offered
 
         sort_by = _choice(args, "sort_by", SORT_KEYS)
         if sort_by:
@@ -409,13 +485,10 @@ class MarketTools:
 
     def _get_movers(self, args: dict) -> dict:
         window = _choice(args, "window", MOVER_WINDOWS, "1h")
-        latest = api.get_all_latest_prices()
+        latest, _, fetched_at, _ = self._latest_market()
         bulk = self._history.averages(window)
-        if not latest or not bulk:
+        if not bulk:
             raise ToolError("Could not fetch live prices from the OSRS Wiki.")
-        fetched_at = time.time()
-        with self._lock:
-            self._note_prices(fetched_at)
         rows = analyzer.find_volatile_items(latest, bulk, self._mapping(),
                                             min_volume=1000, top_n=MOVER_POOL)
         ignored = db.ignored_ids()
@@ -467,10 +540,12 @@ class MarketTools:
         now = time.time()
         alerts = []
         for a in db.get_active_alerts():
-            held, typical = analyzer.margin_history(
-                self._history.recent_prices(a["item_id"]),
-                a["item_name"] in analyzer.GE_TAX_EXEMPT_NAMES)
-            unsteady = held is not None and held < analyzer.FLIP_MIN_MARGIN_HELD
+            # These prices are from the app's last market check, not this question.
+            with self._lock:
+                self._note_prices(a["updated"])
+            prices = self._history.recent_prices(a["item_id"])
+            held, typical, periods = analyzer.margin_history(
+                prices, a["item_name"] in analyzer.GE_TAX_EXEMPT_NAMES)
             alerts.append({
                 "name": a["item_name"], "buy": a["buy"], "sell": a["sell"],
                 "margin_after_tax": a["net"], "qty": a["qty"],
@@ -482,7 +557,8 @@ class MarketTools:
                 "last_trade_age_seconds": (int(now - a["traded_at"])
                                            if a["traded_at"] else None),
                 "margin_held_pct": held, "typical_margin": typical,
-                "warning": _unsteady_warning(held, typical) if unsteady else None,
+                "margin_periods_checked": periods,
+                "warning": _margin_warning(held, typical, periods, prices is None),
             })
         return {
             "capital_gp": capital,

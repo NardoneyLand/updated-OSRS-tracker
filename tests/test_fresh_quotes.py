@@ -32,11 +32,12 @@ GOLD_ORE = [(113, 110), (113, 110), (116, 112), (115, 111), (114, 112), (117, 11
             (116, 112), (112, 111), (114, 111), (115, 115), (116, 114), (115, 111), (115, 111)]
 check(analyzer.margin_history(GOLD_ORE)[0] < analyzer.FLIP_MIN_MARGIN_HELD, f"Gold ore fails the check: {analyzer.margin_history(GOLD_ORE)}")
 check(analyzer.margin_history(GOLD_ORE)[1] == 1, "and its usual margin is 1 gp, not the 3 quoted")
-check(analyzer.margin_history([(120, 100)] * 5) == (None, None), "too few periods proves nothing")
-check(analyzer.margin_history([]) == (None, None) and analyzer.margin_history(None) == (None, None), "no periods proves nothing")
-check(analyzer.margin_history([(120, 100)] * 6) == (100, 18), "a margin that always held")
-check(analyzer.margin_history([(100, 99)] * 6)[0] == 0, "tax can erase a margin")
-check(analyzer.margin_history([(100, 99)] * 6, exempt=True)[0] == 100, "unless the item is exempt")
+check(analyzer.margin_history(GOLD_ORE)[2] == 23, "and it says how many periods that covers")
+check(analyzer.margin_history([(120, 100)] * 11) == (None, None, None), "too few periods proves nothing")
+check(analyzer.margin_history([]) == (None, None, None) and analyzer.margin_history(None) == (None, None, None), "no periods proves nothing")
+check(analyzer.margin_history([(120, 100)] * 12) == (100, 18, 12), "a margin that always held")
+check(analyzer.margin_history([(100, 99)] * 12)[0] == 0, "tax can erase a margin")
+check(analyzer.margin_history([(100, 99)] * 12, exempt=True)[0] == 100, "unless the item is exempt")
 check(analyzer.margin_history([(120, 100)] * 79 + [(100, 100)] * 21)[0] == 79, "shares round down, so 79.x isn't 80")
 
 now = time.time()
@@ -57,17 +58,20 @@ def row_with(prices, lt=LT, avg_5m=AVG_5M):
 
 plain = analyzer.flip_row(ITEM, LT, AVG, 100_000, now=now, avg_5m=AVG_5M)
 check(plain["verdict"] == "Profitable" and plain["margin_held"] is None, "without history nothing changes")
-r, seen = row_with([(1160, 1110)] * 5 + [(1110, 1110)] * 5)
+r, seen = row_with([(1160, 1110)] * 6 + [(1110, 1110)] * 6)
 check(r["verdict"] == "Unsteady" and r["margin_held"] == 50 and seen == [7], f"often gone is Unsteady: {r['verdict']}")
-r, _ = row_with([(1160, 1110)] * 8 + [(1110, 1110)] * 2)
+r, _ = row_with([(1160, 1110)] * 16 + [(1110, 1110)] * 4)
 check(r["verdict"] == "Profitable" and r["margin_held"] == 80, "held exactly 80% passes")
 r, _ = row_with([(1160, 1110)] * 3)
-check(r["verdict"] == "Profitable" and r["margin_held"] is None, "too little history doesn't fail a flip")
-r, _ = row_with([(1110, 1110)] * 10, avg_5m={"avgHighPrice": 1110, "avgLowPrice": 1110})
+check(r["verdict"] == "Profitable" and r["margin_held"] is None and not r["margin_unknown"], "too few trades doesn't fail a flip, and isn't called unknown")
+r, _ = row_with(None)
+check(r["verdict"] == "Profitable" and r["margin_unknown"], "history that isn't ready is marked unknown")
+check(plain["margin_unknown"] is False, "not when nobody asked for it")
+r, _ = row_with([(1110, 1110)] * 12, avg_5m={"avgHighPrice": 1110, "avgLowPrice": 1110})
 check(r["verdict"] == "Suspect", "Suspect outranks Unsteady")
-r, seen = row_with([(1110, 1110)] * 10, lt={**LT, "high": 1100})
+r, seen = row_with([(1110, 1110)] * 12, lt={**LT, "high": 1100})
 check(r["verdict"] == "Unprofitable" and seen == [], "a flip with no margin isn't looked up")
-r, seen = row_with([(1110, 1110)] * 10, lt={**LT, "highTime": now - 9000})
+r, seen = row_with([(1110, 1110)] * 12, lt={**LT, "highTime": now - 9000})
 check(r["verdict"] == "Inactive" and seen == [], "nor is an inactive one")
 check(analyzer.VERDICT_RANK["Marginal"] > analyzer.VERDICT_RANK["Unsteady"] > analyzer.VERDICT_RANK["Suspect"], "it sorts between Marginal and Suspect")
 
@@ -77,7 +81,7 @@ check(not analyzer.alert_worthy({**base, "verdict": "Suspect"}) and not analyzer
 
 # ── The saved five-minute periods ─────────────────────────────────────────────
 history = volume.VolumeHistory()
-check(history.recent_prices(7) == [], "nothing before any periods load")
+check(history.recent_prices(7) is None, "not ready before any periods load")
 current = int(now) - int(now) % 300
 for back in range(1, 27):
     history._buckets["5m"][current - back * 300] = {"7": (10, 10, 1000 + back, 900)} if back != 3 else {}
@@ -90,10 +94,12 @@ check(history.recent_prices("7") == prices, "by text id too")
 check(history.recent_prices(8) == [], "an item that didn't trade has none")
 periods, _end = history._recent
 history._recent = (periods, now - volume.MAX_END_AGE[volume.HOUR] - 5)
-check(history.recent_prices(7) == [], "out of date periods are not used")
+check(history.recent_prices(7) is None, "out of date periods aren't ready")
+history._recent = (periods[:23], now)
+check(history.recent_prices(7) is None, "nor is less than the full 2 hours")
 history._buckets["5m"].clear()
 history._rebuild()
-check(history._recent == ([], 0) and history.recent_prices(7) == [], "and nothing left means nothing returned")
+check(history._recent == ([], 0) and history.recent_prices(7) is None, "and nothing left means not ready")
 
 # ── Ask AI's flip search ──────────────────────────────────────────────────────
 MAPPING = [{"id": 1, "name": "Steady item", "limit": 1000}, {"id": 2, "name": "Shaky item", "limit": 1000},
@@ -110,7 +116,7 @@ LATEST = {"1": trade(1200, 1000), "2": trade(1200, 1000), "3": trade(1200, 1000,
           "4": trade(1200, 1000), "5": trade(1200, 1000, age=9000), "6": trade(1200, 1170)}
 BULK = {str(i): {"avgHighPrice": 1200, "avgLowPrice": 1000, "highPriceVolume": 5000, "lowPriceVolume": 5000} for i in range(1, 7)}
 BULK_5M = {"4": {"avgHighPrice": 1100, "avgLowPrice": 1090}}
-RECENT = {2: [(1200, 1000)] * 3 + [(1100, 1100)] * 7}
+RECENT = {2: [(1200, 1000)] * 6 + [(1100, 1100)] * 14}
 fetches = []
 api.get_all_latest_prices = lambda: (fetches.append(1), LATEST)[1]
 api.get_bulk_average = lambda step="1h": BULK_5M if step == "5m" else BULK
@@ -140,7 +146,8 @@ check(r["left_out"] == {"suspect": 1, "side_idle_over_5_min": 1}, f"and it says 
 check(r["matching_items"] == 3, "the count is what's offered")
 shaky = next(f for f in r["flips"] if f["name"] == "Shaky item")
 check(shaky["verdict"] == "Unsteady" and shaky["margin_held_pct"] == 30, f"an unsteady flip stays, marked: {shaky['verdict']}")
-check(shaky["typical_margin"] == -22 and "only 30%" in shaky["warning"] and "usually -22 gp" in shaky["warning"], f"with a warning the app wrote: {shaky['warning']}")
+check(shaky["typical_margin"] == -22 and "only 30% of 20 recent" in shaky["warning"] and "usually -22 gp" in shaky["warning"], f"with a warning the app wrote: {shaky['warning']}")
+check(shaky["margin_periods_checked"] == 20, "and how many periods it covers")
 steady = next(f for f in r["flips"] if f["name"] == "Steady item")
 check(steady["warning"] is None and steady["margin_held_pct"] is None, "a flip with no history has no warning")
 check([f["name"] for f in r["flips"]][-1] == "Shaky item", "unsteady flips rank below sound ones")
@@ -163,6 +170,9 @@ item = tools.run("get_item", {"name": "Idle item"})
 check(item["flip"]["name"] == "Idle item" and "over 5 minutes" in item["flip"]["warning"], "asking by name still answers, with the warning")
 item = tools.run("get_item", {"name": "Shaky item"})
 check(item["flip"]["verdict"] == "Unsteady" and item["flip"]["warning"], "get_item warns too")
+unready = aitools.MarketTools(lambda: MAPPING, volume.VolumeHistory())
+flip = unready.run("get_flips", {})["flips"][0]
+check("isn't ready" in flip["warning"] and flip["margin_held_pct"] is None, f"history that isn't ready gets a warning: {flip['warning']}")
 check(item["prices_checked_at"] == time.strftime("%H:%M:%S", time.localtime(tools.prices_checked_at())), "and says when prices were checked")
 
 # ── How old the prices are ────────────────────────────────────────────────────
@@ -198,12 +208,18 @@ F.SCRIPTS["anthropic"] = [answer(tool=True), answer()]
 result = chat.send("first", "k" * 20, noop, noop, threading.Event())
 check(result["prices_at"] and chat.prices_at == result["prices_at"], "the answer reports when its prices were checked")
 check(F.REQUESTS[-1]["body"]["messages"][0]["content"] == "first", "a first question goes unchanged")
-then = time.strftime("%H:%M:%S", time.localtime(result["prices_at"]))
+oldest = result["prices_at"]
 F.SCRIPTS["anthropic"] = [answer()]
 result = chat.send("second", "k" * 20, noop, noop, threading.Event())
 sent = F.REQUESTS[-1]["body"]["messages"][-1]["content"]
-check(sent.startswith("second") and "not the user" in sent and then in sent and "look them up again" in sent, f"a follow-up carries the reminder: {sent}")
+check(sent.startswith("second") and "not the user" in sent and "under a minute ago" in sent and "look them up again" in sent, f"a follow-up carries the reminder: {sent}")
 check(result["prices_at"] is None and chat.prices_at, "with no new lookup, the answer has no time but the chat remembers")
+chat.prices_at = time.time() - 3700
+F.SCRIPTS["anthropic"] = [answer(tool=True), answer()]
+chat.send("third", "k" * 20, noop, noop, threading.Event())
+check("1 h 1 min ago" in F.REQUESTS[-2]["body"]["messages"][-1]["content"], "it says how old the oldest prices are")
+check(chat.prices_at < time.time() - 3600, "and a newer lookup doesn't hide them")
+check(ai._age_text(30) == "under a minute" and ai._age_text(300) == "5 min" and ai._age_text(90000) == "25 h 0 min", "ages read plainly")
 fresh = ai.Chat(ai.ANTHROPIC, "claude-opus-5-5", tools)
 F.SCRIPTS["anthropic"] = [answer()]
 fresh.send("one", "k" * 20, noop, noop, threading.Event())
@@ -213,10 +229,63 @@ check(F.REQUESTS[-1]["body"]["messages"][-1]["content"] == "two", "no lookups so
 
 check("Never call prices fresh" in ai.SYSTEM_PROMPT and "repeat it" in ai.SYSTEM_PROMPT, "the AI is told how to treat quotes")
 check("Unsteady" in ai.SYSTEM_PROMPT and "left_out" in ai.SYSTEM_PROMPT, "and what the new fields mean")
-check("never promise a profit" in ai.SYSTEM_PROMPT, "the honesty rules aren't in the part you can delete")
+check("never promise a profit" in ai.SYSTEM_PROMPT and "present these as estimates" in ai.SYSTEM_PROMPT and "has not set a capital" in ai.SYSTEM_PROMPT, "the honesty rules aren't in the part you can delete")
+check("estimates" not in ai.DEFAULT_INSTRUCTIONS and "capital" not in ai.DEFAULT_INSTRUCTIONS, "and aren't repeated in it")
 check("repeat any warning" in ai.INSTRUCTIONS_INTRO, "and instructions can't turn warnings off")
 for name in ("Unsteady", "Reset to default", "View built-in rules", "line under the answer"):
     check(name in " ".join(b for _h, b in gui.HELP_SECTIONS), f"Help mentions {name}")
+
+# ── The log ───────────────────────────────────────────────────────────────────
+import logging
+import applog
+
+
+class Keep(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+
+keep = Keep()
+applog.log.addHandler(keep)
+applog.log.setLevel(logging.INFO)
+tools.run("get_flips", {"limit": 5})
+logged = keep.lines[-1]
+check(logged.startswith('AI get_flips {"limit": 5} -> 3 offered, left out 1 suspect, 1 idle, prices checked '), f"a lookup is logged: {logged.splitlines()[0]}")
+check("  Shaky item buy 1000 sell 1200 margin 176 age" in logged and "Unsteady held 30%" in logged, f"with the numbers it returned: {logged}")
+tools.run("get_item", {"name": "Shaky item"})
+check("-> Shaky item" in keep.lines[-1] and "held 30%" in keep.lines[-1], "get_item too")
+tools.run("get_movers", {})
+check("movers over 1h" in keep.lines[-1], "and get_movers")
+tools.run("get_my_tracker", {})
+check("on the Watchlist" in keep.lines[-1], "and get_my_tracker")
+tools.run("get_alert_history", {})
+check(keep.lines[-1].endswith("items"), "and get_alert_history")
+tools.run("get_news", {})
+check(keep.lines[-1].endswith("headlines"), "and get_news")
+tools.run("get_item", {"name": "zzzzqqqq"})
+check("-> error: No item found" in keep.lines[-1], "a failed lookup says why")
+tools.run("get_flips", {"name_contains": "x" * 2000})
+check(len(keep.lines[-1].splitlines()[0]) < 400, "a huge argument can't flood the log")
+real_log, aitools._log_lookup = aitools._log_lookup, lambda *a: 1 / 0
+check("flips" in tools.run("get_flips", {}), "a problem with the log doesn't cost the answer")
+aitools._log_lookup = real_log
+F.SCRIPTS["anthropic"] = [answer(tool=True), answer("SECRET-ANSWER")]
+keep.lines.clear()
+ai.Chat(ai.ANTHROPIC, "claude-opus-5-5", tools).send("SECRET-QUESTION", "k-SECRET-KEY" + "k" * 20, noop, noop, threading.Event())
+text = "\n".join(keep.lines)
+check("AI get_flips" in text and "SECRET" not in text, f"the question, answer and key stay out: {text[:200]}")
+applog.log.removeHandler(keep)
+
+# ── Old instructions keep their whole text ────────────────────────────────────
+long_text = "y" * (ai.MAX_INSTRUCTIONS - 100)
+kept = gui.saved_ai_instructions({"ai_instructions": long_text})
+check(kept.endswith(long_text) and len(kept) <= ai.MAX_INSTRUCTIONS, "long older instructions aren't cut")
+check(kept != long_text and kept.startswith(ai.DEFAULT_INSTRUCTIONS.splitlines()[0]), "whole default lines fill what room is left")
+check(gui.saved_ai_instructions({"ai_instructions": "z" * ai.MAX_INSTRUCTIONS}) == "z" * ai.MAX_INSTRUCTIONS, "with no room, only theirs")
 
 # ── The real app ──────────────────────────────────────────────────────────────
 root = tk.Tk()
@@ -249,7 +318,7 @@ def scenario():
         verdicts = table(app.flip_tree, "verdict")
         check(verdicts.get("Shaky item") == "Unsteady" and verdicts.get("Steady item") == "Profitable", f"FlipRec shows the verdict: {verdicts}")
         notes = table(app.flip_tree, "signal")
-        check(notes.get("Shaky item") == "Margin held 30% of 2h, usually -22", f"and why: {notes.get('Shaky item')}")
+        check(notes.get("Shaky item") == "Held 30%, usually -22", f"and why: {notes.get('Shaky item')}")
         tag = next(app.flip_tree.item(i, "tags")[0] for i in app.flip_tree.get_children() if app.flip_tree.item(i, "values")[0] == "Shaky item")
         check(tag == "warn", "in the warning color")
 
@@ -268,10 +337,74 @@ def scenario():
         settle(lambda: False, 0.1)
         check(table(app.flip_tree, "verdict").get("Shaky item") == "Unsteady", "and the Alerts view marks them")
 
+        # The Note column sorts by what it shows
+        app.flip_show_var.set("All verdicts")
+        app._apply_flip_filters()
+        app._sort_fliprec("note", True)
+        settle(lambda: False, 0.1)
+        shown = [app.flip_tree.item(i, "values")[list(app.flip_tree["columns"]).index("signal")].lower() for i in app.flip_tree.get_children()]
+        check(shown == sorted(shown, reverse=True), f"sorted by the text: {shown}")
+        app.flip_sort = (None, None)
+        app._update_tables()
+
+        # Traded within
+        check(app.flip_traded_var.get() == "Any time", "Traded within starts at Any time")
+        now_t = time.time()
+        for row in app.flip_results:
+            row["traded_at"] = now_t - {"Steady item": 50, "Shaky item": 200, "Low item": 700}.get(row["name"], 5000)
+        def listed():
+            return set(table(app.flip_tree, "verdict"))
+        app._render_fliprec_table()
+        everything = listed()
+        check({"Steady item", "Shaky item", "Low item"} <= everything, f"Any time hides nothing: {everything}")
+        check("hasn't traded within" not in app.flip_banner.get(), "and says nothing")
+        for label, expected in (("1 min", {"Steady item"}), ("5 min", {"Steady item", "Shaky item"}), ("15 min", {"Steady item", "Shaky item", "Low item"})):
+            app.flip_traded_var.set(label)
+            app._render_fliprec_table()
+            check(listed() == expected, f"{label} keeps {expected}: {listed()}")
+        check(list(gui.TRADED_WITHIN)[0] == "Any time" and gui.TRADED_WITHIN["1 hour"] == 3600, "the choices run up to an hour")
+        app.flip_traded_var.set("1 min")
+        app._render_fliprec_table()
+        hidden = len(everything) - 1
+        check(f"{hidden} item(s) hidden: a side hasn't traded within 1 min" in app.flip_banner.get(), f"the banner counts them: {app.flip_banner.get()}")
+        app.flip_show_var.set("Alerts")
+        app._render_fliprec_table()
+        check(listed() <= {"Steady item"}, f"it applies to the Alerts view too: {listed()}")
+        for row in app.flip_results:
+            row["traded_at"] = now_t - 5000
+        app._render_fliprec_table()
+        check(listed() == set() and "No flips at or above" not in app.flip_banner.get() and "item(s) hidden" in app.flip_banner.get(), f"an empty list says why, not 'no flips': {app.flip_banner.get()}")
+        app.flip_show_var.set("Inactive")
+        app._render_fliprec_table()
+        check("hasn't traded within" not in app.flip_banner.get(), "it doesn't apply when asking for Inactive")
+        app.flip_traded_var.set("5 min")
+        app.flip_show_var.set("All verdicts")
+        app._apply_flip_filters()
+        check(settings.load()["flip_traded_within"] == "5 min", "the choice is saved")
+        check(settings.load()["flip_show"] == "All verdicts", "alongside the others")
+        app.flip_traded_var.set("Any time")
+        app._apply_flip_filters()
+        settle(lambda: False, 0.1)
+
+        # A banner when the margin can't be checked
+        real_recent = app._volume.recent_prices
+        app._volume.recent_prices = lambda item_id: None
+        app._update_tables()
+        settle(lambda: False, 0.1)
+        check("aren't ready" in app.flip_banner.get(), f"FlipRec says history isn't ready: {app.flip_banner.get()}")
+        check(table(app.flip_tree, "signal").get("Steady item") == "History not ready", f"and in the Note column: {table(app.flip_tree, 'signal').get('Steady item')}")
+        app._volume.recent_prices = real_recent
+        app._update_tables()
+        settle(lambda: False, 0.1)
+        check("aren't ready" not in app.flip_banner.get(), "not once it is")
+
         # Tracker data the AI reads
         tracker = app._ai_tools
         tracker._history = History()
+        tracker.new_question()
         state = tracker.run("get_my_tracker", {})
+        updated = min(a["updated"] for a in db.get_active_alerts())
+        check(tracker.prices_checked_at() == updated, "alert prices count towards 'Prices checked'")
         alert = next(a for a in state["active_alerts"] if a["name"] == "Shaky item")
         check("only 30%" in alert["warning"], f"live alerts carry the warning to the AI: {alert['warning']}")
         check(next(a for a in state["active_alerts"] if a["name"] == "Steady item")["warning"] is None, "only on the ones that need it")

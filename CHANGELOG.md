@@ -3,6 +3,35 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.1 — 2026-11-02
+
+**New**
+- A Traded within dropdown on FlipRec hides items where a side hasn't traded in the
+  time you pick, from 1 minute to 1 hour.
+- Each lookup Ask AI makes, and the numbers it got back, is saved to the log file, so
+  you can check what it saw. Your questions, its answers and your key aren't saved.
+
+**Changed**
+- A flip now needs at least 12 five-minute periods of history to be marked Unsteady,
+  and warnings say how many were used.
+- The Note column can sort by what it shows, and its Unsteady note is shorter.
+- The Instructions button shows (off) after you clear your instructions.
+- "Present these as estimates" and the reminder about an unset capital are back in
+  the rules you can't remove.
+
+**Fixed**
+- FlipRec scrolled sideways at the default window size, which also stopped column
+  edges from resizing there.
+- While 5-minute history is loading or out of date, FlipRec and Ask AI now say the
+  margin couldn't be checked, rather than showing the flip with no warning.
+- Long instructions saved before 1.6.0 could lose their ending. Your own text now
+  stays whole, and the defaults make room.
+- "Prices checked" under an Ask AI answer now covers alert prices, which can be older
+  than the rest.
+- The follow-up reminder to Ask AI now goes by the oldest prices in the chat and how
+  long ago they were looked up.
+- Ask AI's price moves now use the same prices as the rest of its answer.
+
 ## 1.6.0 — 2026-11-02
 
 **New**

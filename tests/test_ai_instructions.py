@@ -269,7 +269,7 @@ def scenario():
         button(dlg, "Clear").invoke()
         button(dlg, "Save").invoke()
         root.update()
-        check(app._ai_instructions == "" and app.ai_instructions_btn.cget("text") == "Instructions…", "Clear then Save turns them off")
+        check(app._ai_instructions == "" and app.ai_instructions_btn.cget("text") == "Instructions (off)", "Clear then Save turns them off, and the button says so")
         body = ask("fifth")
         check(body["system"] == ai.SYSTEM_PROMPT and len(body["messages"]) == 1, "the AI goes back to the normal prompt")
 

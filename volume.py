@@ -164,13 +164,15 @@ class VolumeHistory:
             self._fallbacks[step] = (cached, now, got_at)
         return cached if now - got_at <= keep else {}
 
-    def recent_prices(self, item_id) -> List[Tuple[int, int]]:
+    def recent_prices(self, item_id) -> Optional[List[Tuple[int, int]]]:
         """(average high, average low) for each of the last 2 hours' 5-minute
-        periods where both sides traded. Empty if those periods are out of date.
-        Reads _recent only once, as _current does with _views."""
+        periods where both sides traded. None if those periods are still loading
+        or out of date, which is different from an item with no trades. Reads
+        _recent only once, as _current does with _views."""
         periods, end = self._recent
-        if time.time() - end > MAX_END_AGE[HOUR]:
-            return []
+        if (len(periods) < RECENT_PRICE_PERIODS
+                or time.time() - end > MAX_END_AGE[HOUR]):
+            return None
         key = str(item_id)
         prices = []
         for period in periods:

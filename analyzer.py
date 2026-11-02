@@ -256,7 +256,7 @@ FLIP_MIN_5M_SUPPORT = 0.5     # the 5m averages must back up this share of the
                               # and one-off trades at 0% or below.
 FLIP_MIN_MARGIN_HELD = 80     # % of recent 5m periods the margin must have been
                               # positive in, or the flip is marked "Unsteady"
-FLIP_HELD_MIN_PERIODS = 6     # fewer periods with both sides priced proves nothing
+FLIP_HELD_MIN_PERIODS = 12    # fewer periods with both sides priced proves nothing
 FLIP_MIN_SIDE_VOLUME = 10     # min items traded per side in the last hour
 VOLUME_PACE_UP = 3.0          # the last hour vs an average hour over the day
 VOLUME_PACE_DOWN = 0.5
@@ -358,24 +358,33 @@ def margin_at_5m_prices(avg_5m: Optional[dict], buy: int, sell: int, net: int,
     return net_5m, net <= 0 or net_5m >= net * FLIP_MIN_5M_SUPPORT
 
 
-def margin_history(prices: List[Tuple[int, int]],
-                   exempt: bool = False) -> Tuple[Optional[int], Optional[int]]:
+def margin_history(prices: Optional[List[Tuple[int, int]]], exempt: bool = False
+                   ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
     """
     How a margin has behaved, from (average high, average low) price pairs:
-    the % of periods it was positive after tax, and its median. (None, None) if
-    there are too few periods to tell.
+    the % of periods it was positive after tax, its median, and how many periods
+    that covers. All None if there are too few periods to tell.
     """
     margins = [high - ge_tax(high, exempt) - low for high, low in prices or []]
     if len(margins) < FLIP_HELD_MIN_PERIODS:
-        return None, None
+        return None, None, None
     return (sum(m > 0 for m in margins) * 100 // len(margins),
-            statistics.median_low(margins))
+            statistics.median_low(margins), len(margins))
+
+
+def why_no_alert(row: dict) -> Optional[str]:
+    """What keeps a flip from alerting: 'inactive', 'suspect' or 'side_idle'.
+    None if it's recent and believable enough to alert on or for Ask AI to offer.
+    Unsteady flips pass: they stay in view, marked by their verdict."""
+    if not row["active"]:
+        return "inactive"
+    if row["verdict"] == "Suspect":
+        return "suspect"
+    return "side_idle" if row["slow"] else None
 
 
 def alert_worthy(row: dict) -> bool:
-    """A flip recent and believable enough to alert on or for Ask AI to offer.
-    Unsteady flips pass: they stay in view, marked by their verdict."""
-    return row["active"] and not row["slow"] and row["verdict"] != "Suspect"
+    return why_no_alert(row) is None
 
 
 def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
@@ -386,7 +395,8 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
     Flip stats for one item, profitable or not (used by FlipRec, Alerts and
     the Watchlist). `lt` is the item's /latest entry, `avg` its /1h entry,
     `avg_5m` its /5m entry if known, and `recent_prices(item_id)` gives its
-    recent 5m average prices if known. Returns None if either side has no price.
+    recent 5m average prices, or None if those aren't ready. Returns None if
+    either side has no price.
 
     Buys at the latest instant-sell price (`low`) and sells at the latest
     instant-buy price (`high`), minus the GE tax: the same numbers an in-game
@@ -400,7 +410,8 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
     traded), traded_at (when that was), slow (active, but a side idle >
     FLIP_SLOW_AGE), active, affordable, verdict, reversion, reversion_pct,
     net_5m (the margin at 5m average prices, None without 5m data), backed_5m,
-    margin_held and typical_margin (see margin_history; None if not worked out).
+    margin_held, typical_margin and margin_periods (see margin_history; None if
+    not worked out), margin_unknown (the recent 5m prices weren't ready).
     """
     import time as _time
     now = now if now is not None else _time.time()
@@ -449,10 +460,12 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
 
     net_5m, backed_5m = margin_at_5m_prices(avg_5m, buy, sell, net, exempt)
 
-    margin_held, typical_margin = None, None
+    margin_held, typical_margin, margin_periods = None, None, None
+    margin_unknown = False
     if recent_prices and active and net > 0:
-        margin_held, typical_margin = margin_history(
-            recent_prices(item_id), exempt)
+        prices = recent_prices(item_id)
+        margin_unknown = prices is None
+        margin_held, typical_margin, margin_periods = margin_history(prices, exempt)
 
     if not active:
         verdict = "Inactive"
@@ -480,6 +493,7 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
         "reversion": reversion, "reversion_pct": round(rev_pct, 1),
         "net_5m": net_5m, "backed_5m": backed_5m,
         "margin_held": margin_held, "typical_margin": typical_margin,
+        "margin_periods": margin_periods, "margin_unknown": margin_unknown,
     }
 
 

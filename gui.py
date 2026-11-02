@@ -167,12 +167,23 @@ def saved_ai_instructions(prefs: dict) -> str:
     so older versions can still read it. Every question sends them, so a
     hand-edited value is held to the limit, and ignored if it isn't text."""
     saved = prefs.get("ai_standing_instructions")
-    if not isinstance(saved, str):
-        older = prefs.get("ai_instructions")
-        saved = ai.DEFAULT_INSTRUCTIONS
-        if isinstance(older, str) and older.strip():
-            saved += "\n\n" + older.strip()
-    return saved.strip()[:ai.MAX_INSTRUCTIONS]
+    if isinstance(saved, str):
+        return saved.strip()[:ai.MAX_INSTRUCTIONS]
+    older = prefs.get("ai_instructions")
+    older = older.strip()[:ai.MAX_INSTRUCTIONS] if isinstance(older, str) else ""
+    if not older:
+        return ai.DEFAULT_INSTRUCTIONS
+    # Someone's own words matter more: only whole default lines that fit go first.
+    lines = ai.DEFAULT_INSTRUCTIONS.splitlines()
+    while lines and len("\n".join(lines)) + 2 + len(older) > ai.MAX_INSTRUCTIONS:
+        lines.pop()
+    return "\n\n".join(["\n".join(lines), older]) if lines else older
+
+
+# FlipRec's "Traded within" choices, in seconds.
+TRADED_WITHIN = {"Any time": None, "1 min": 60, "2 min": 120, "3 min": 180,
+                 "5 min": 300, "10 min": 600, "15 min": 900, "30 min": 1800,
+                 "1 hour": 3600}
 
 
 def fmt_target(target, hit, fmt) -> str:
@@ -365,6 +376,9 @@ HELP_SECTIONS = [
      "Controls:\n"
      "    •  Hide inactive — hides items whose margin isn't real (see "
      "Inactive below).\n"
+     "    •  Traded within — hides items where a side hasn't traded in that "
+     "long, going by the same age as Last trade. It applies to every Show "
+     "choice except Inactive, and goes by the time of the last market check.\n"
      "    •  Show — Alerts, which it opens on (see Alerts below), All "
      "verdicts for every flip, or one verdict such as Profitable.\n"
      "    •  Alert when est. profit ≥ — your alert threshold.\n\n"
@@ -399,9 +413,11 @@ HELP_SECTIONS = [
      "    •  Marginal — still profitable after tax, but a thin ROI or low "
      "volume.\n"
      "    •  Unsteady — profitable right now, but the margin was positive in "
-     "under 80% of the last 2 hours of 5-minute average prices, so it may be a "
-     "brief high. The Note column shows how often it held and its usual size. "
-     "Items without enough recent trades aren't marked.\n"
+     "under 80% of the 5-minute average prices from the last 2 hours, so it may "
+     "be a brief high. The Note column shows how often it held and its usual "
+     "size. Periods where one side didn't trade don't count, and an item needs "
+     "at least 12 that do to be marked. While that history is loading or out of "
+     "date nothing can be marked, and FlipRec says so above the table.\n"
      "    •  Suspect — looks too good to be true: ROI over 40%, the "
      "price is 25%+ away from its 1-hour average, or the margin at the last "
      "5 minutes' average prices is under half the margin shown. Often one "
@@ -593,9 +609,9 @@ HELP_SECTIONS = [
      "    Buy: price in full gp\n"
      "    Sell: price in full gp\n"
      "    and so on\n\n"
-     "    •  The button shows a ✓ when yours differ from the defaults. To go "
-     "back, click Reset to default, then Save. To use none, click Clear, then "
-     "Save.\n"
+     "    •  The button shows a ✓ when yours differ from the defaults, and "
+     "(off) when you've cleared them. To go back, click Reset to default, then "
+     "Save. To use none, click Clear, then Save.\n"
      "    •  View built-in rules shows the rest of what the AI is told, such as "
      "how the app's numbers work. You can read those but not change them.\n"
      "    •  They shape how the AI answers, such as layout, tone, length and "
@@ -625,7 +641,11 @@ HELP_SECTIONS = [
      "is. The rest of your Ignored List isn't sent.\n\n"
      "The AI can read this data but can't change anything in the app or "
      "place trades. It can make mistakes, so check the numbers in game "
-     "before you trade."),
+     "before you trade.\n\n"
+     "Each lookup the AI makes, and the numbers it got back, is saved to "
+     "osrs_tracker.log on your computer, so you can check what it saw. Your "
+     "questions, its answers and your key aren't saved there, and the log "
+     "isn't sent anywhere."),
 
     ("News",
      "The latest official OSRS news loads automatically when the app "
@@ -1526,10 +1546,15 @@ class OSRSTrackerApp:
                                 ("Upfront", "cost"), ("Est. profit", "profit"),
                                 ("Vol 1h", "volume")):
                 values[label] = cells[cell]
-        self._search_held_note = (
-            f"The margin was positive in only {row['margin_held']}% of the last 2 "
-            f"hours, and is usually {fmt(row['typical_margin'])} gp."
-            if row and row["verdict"] == "Unsteady" else None)
+        self._search_held_note = None
+        if row and row["verdict"] == "Unsteady":
+            self._search_held_note = (
+                f"The margin was positive in only {row['margin_held']}% of "
+                f"{row['margin_periods']} recent 5-minute periods, and is usually "
+                f"{fmt(row['typical_margin'])} gp.")
+        elif row and row["margin_unknown"]:
+            self._search_held_note = ("Recent 5-minute prices aren't ready, so the "
+                                      "app can't check how steady this margin is.")
         for label, widget in self._search_stats.items():
             if label in ("Qty", "ROI", "Upfront", "Est. profit", "Vol 1h"):
                 widget.config(text=values.get(label, "-"))
@@ -2867,7 +2892,7 @@ class OSRSTrackerApp:
         ("tax",     "GE tax",      "tax",       64,  "e",      True),
         ("limit",   "4h limit",    "limit",     72,  "e",      True),
         ("verdict", "Verdict",     "verdict",   80,  "center", True),
-        ("signal",  "Note",        "reversion", 250, "w",      False),
+        ("signal",  "Note",        "note",      165, "w",      False),
     ]
 
     def _build_fliprec_tab(self) -> ttk.Frame:
@@ -2916,6 +2941,18 @@ class OSRSTrackerApp:
                         variable=self.flip_hide_inactive_var,
                         command=self._apply_flip_filters
                         ).pack(side="left", padx=(0, 16))
+
+        ttk.Label(bar, text="Traded within:", style="TLabel"
+                  ).pack(side="left", padx=(0, 6))
+        traded = prefs.get("flip_traded_within")
+        self.flip_traded_var = tk.StringVar(
+            value=traded if traded in TRADED_WITHIN else "Any time")
+        traded_combo = ttk.Combobox(
+            bar, textvariable=self.flip_traded_var, state="readonly",
+            width=8, values=list(TRADED_WITHIN))
+        traded_combo.pack(side="left")
+        traded_combo.bind("<<ComboboxSelected>>",
+                          lambda _e: self._apply_flip_filters())
 
         # Banner for items that are not actively trading
         self.flip_banner = tk.StringVar(value="")
@@ -2979,6 +3016,7 @@ class OSRSTrackerApp:
             "flip_hide_inactive": bool(self.flip_hide_inactive_var.get()),
             "flip_price_format": self.flip_format_var.get(),
             "flip_show": self.flip_show_var.get(),
+            "flip_traded_within": self.flip_traded_var.get(),
         })
         self._show_market_note()
         if not self._market:
@@ -3009,7 +3047,11 @@ class OSRSTrackerApp:
             self.flip_results.sort(
                 key=lambda r: analyzer.VERDICT_RANK[r["verdict"]],
                 reverse=desc)
-        elif key in ("name", "reversion"):
+        elif key == "note":
+            fmt = self._price_fmt()
+            self.flip_results.sort(key=lambda r: self._flip_note(r, fmt).lower(),
+                                   reverse=desc)
+        elif key == "name":
             self.flip_results.sort(key=lambda r: str(r[key]).lower(),
                                    reverse=desc)
         else:
@@ -3020,6 +3062,16 @@ class OSRSTrackerApp:
         arrow = " ▼" if desc else " ▲"
         for cid, label, k, *_ in self.FLIP_COLUMNS:
             self.flip_tree.heading(cid, text=label + (arrow if k == key else ""))
+
+    def _flip_note(self, r: dict, fmt) -> str:
+        """The Note column. There's room for one, so the most useful one wins."""
+        if not r["backed_5m"]:
+            return f"5m margin only {fmt(r['net_5m'])}"
+        if r["verdict"] == "Unsteady":
+            return f"Held {r['margin_held']}%, usually {fmt(r['typical_margin'])}"
+        if r["reversion"]:
+            return f"{r['reversion']} ({r['reversion_pct']:+.1f}%)"
+        return "History not ready" if r["margin_unknown"] else ""
 
     def _render_fliprec_table(self):
         alert_ids = self._alert_ids()
@@ -3049,11 +3101,20 @@ class OSRSTrackerApp:
             rows = [r for r in results
                     if (r["active"] or not hide)
                     and (show == "All verdicts" or r["verdict"] == show)]
+        # Like Hide inactive, it can't apply to asking for the inactive ones.
+        traded = self.flip_traded_var.get()
+        within = TRADED_WITHIN.get(traded) if show != "Inactive" else None
+        not_recent = 0
+        if within:
+            cutoff = time.time() - within
+            recent = [r for r in rows if r["traded_at"] >= cutoff]
+            not_recent = len(rows) - len(recent)
+            rows = recent
         rows = rows[:FLIP_MAX_ROWS]
 
         banner = []
         # Above the table rather than in it, where only the Item column shows.
-        if not rows:
+        if not rows and not not_recent:
             banner.append(
                 f"No flips at or above {fmt_gp(self._alert_threshold())} gp "
                 f"est. profit right now." if show == "Alerts"
@@ -3067,6 +3128,14 @@ class OSRSTrackerApp:
             banner.append(
                 f"⚠ {len(inactive)} item(s) are inactive (no trade on one "
                 f"side in the last hour); their margins are likely not real.")
+        if not_recent:
+            banner.append(
+                f"⏱ {not_recent} item(s) hidden: a side hasn't traded within "
+                f"{traded}. Set Traded within to Any time to see them.")
+        if any(r["margin_unknown"] for r in rows):
+            banner.append(
+                "⚠ Recent 5-minute prices aren't ready, so Unsteady flips can't "
+                "be marked yet.")
         slow = sum(1 for r in rows if r["slow"])
         if slow:
             banner.append(
@@ -3081,18 +3150,10 @@ class OSRSTrackerApp:
             tag = {"Profitable": "good", "Marginal": "warn", "Unsteady": "warn",
                    "Suspect": "warn"}.get(r["verdict"], "dim")
             verdict = "⚠ Inactive" if not r["active"] else r["verdict"]
-            sig = r["reversion"]
-            if sig:
-                sig = f"{sig} ({r['reversion_pct']:+.1f}%)"
-            if not r["backed_5m"]:
-                sig = f"5m margin only {fmt(r['net_5m'])}"
-            elif r["verdict"] == "Unsteady":
-                sig = (f"Margin held {r['margin_held']}% of 2h, "
-                       f"usually {fmt(r['typical_margin'])}")
             cells = self._shared_cells(r, fmt)
             cells.update(net=fmt(r["net"]), tax=fmt(r["tax"]),
                          limit=fmt(r["limit"]) if r["limit"] else "?",
-                         verdict=verdict, signal=sig)
+                         verdict=verdict, signal=self._flip_note(r, fmt))
             iid = tree.insert("", "end", tags=(tag,),
                               values=row_values(self.FLIP_COLUMNS, cells))
             self.flip_id_map[iid] = r["item_id"]
@@ -3802,9 +3863,10 @@ class OSRSTrackerApp:
         self._ai_write(AI_INTRO + "\n", "note")
 
     def _update_ai_instructions_btn(self):
-        changed = self._ai_instructions not in ("", ai.DEFAULT_INSTRUCTIONS)
         self.ai_instructions_btn.config(
-            text="Instructions ✓" if changed else "Instructions…")
+            text={"": "Instructions (off)",
+                  ai.DEFAULT_INSTRUCTIONS: "Instructions…"
+                  }.get(self._ai_instructions, "Instructions ✓"))
 
     def _ai_instructions_dialog(self):
         """Dialog to see and change the instructions sent with every question,

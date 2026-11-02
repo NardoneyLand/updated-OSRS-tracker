@@ -359,6 +359,7 @@ def scenario():
 
         api.get_timeseries = series
         gui.analyzer.recent_market = market
+        app._volume.recent_prices = lambda item_id: []   # history ready, no note about it
         app.notebook.select(app.search_tab)
         settle()
         app._lookup_item(MAPPING[0])
