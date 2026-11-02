@@ -313,6 +313,9 @@ HELP_SECTIONS = [
      "    •  Qty — how many you can realistically flip: the smallest of "
      "what your capital buys, the 4h limit, and about 4 hours of market "
      "volume.\n"
+     "    •  Upfront — Buy × Qty: the gp you need up front to buy the whole "
+     "Qty. With no Capital set, it assumes the full 4h limit. You can start "
+     "with less by buying fewer.\n"
      "    •  Est. profit — Net / item × Qty.\n"
      "    •  Vol 1h — units traded in the last hour on the slower side, "
      "which is what limits how fast a flip fills. ▲ means at least 3x its "
@@ -820,7 +823,7 @@ class OSRSTrackerApp:
         # Big enough for the Search panel + chart, but never off-screen
         # (120px vertical margin leaves room for taskbars / DPI scaling).
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        self.root.geometry(f"{min(1250, sw - 80)}x{min(860, sh - 120)}")
+        self.root.geometry(f"{min(1380, sw - 80)}x{min(860, sh - 120)}")
         # A fixed floor, so small screens can still shrink or tile the window.
         self.root.minsize(min(900, sw - 80), min(560, sh - 120))
         self.root.configure(bg=COLOR_BG)
@@ -1486,6 +1489,7 @@ class OSRSTrackerApp:
         ("sell",   "Sell (gp)",   "sell",      95,  "e", True),
         ("net",    "Net / item",  "net",       90,  "e", True),
         ("qty",    "Qty",         "qty",       75,  "e", True),
+        ("cost",   "Upfront",     "cost",      100, "e", True),
         ("profit", "Est. profit", "profit",    115, "e", True),
         ("roi",    "ROI",         "roi",       65,  "e", True),
         ("volume", "Vol 1h",      "volume",    80,  "e", True),
@@ -1725,7 +1729,8 @@ class OSRSTrackerApp:
         for a in rows:
             iid = tree.insert("", "end", tags=("alert",), values=(
                 a["item_name"], fmt(a["buy"]), fmt(a["sell"]), fmt(a["net"]),
-                fmt(a["qty"]), fmt(a["profit"]), f"{a['roi']:.1f}%",
+                fmt(a["qty"]), fmt(a["cost"]), fmt(a["profit"]),
+                f"{a['roi']:.1f}%",
                 self._volume_text(a["item_id"], a["volume"], fmt),
                 fmt_last_trade(a["traded_at"]),
                 time.strftime("%m/%d %H:%M", time.localtime(a["timestamp"])),
@@ -2369,13 +2374,14 @@ class OSRSTrackerApp:
     FLIP_COLUMNS = [
         # (tree id, header, data key, width, anchor, default desc)
         ("item",    "Item",        "name",      184, "w",      False),
-        ("buy",     "Buy (gp)",    "buy",       74,  "e",      False),
-        ("sell",    "Sell (gp)",   "sell",      74,  "e",      True),
-        ("tax",     "GE tax",      "tax",       60,  "e",      True),
+        ("buy",     "Buy (gp)",    "buy",       92,  "e",      False),
+        ("sell",    "Sell (gp)",   "sell",      92,  "e",      True),
+        ("tax",     "GE tax",      "tax",       64,  "e",      True),
         ("net",     "Net / item",  "net",       85,  "e",      True),
         ("roi",     "ROI",         "roi",       50,  "e",      True),
         ("limit",   "4h limit",    "limit",     72,  "e",      True),
         ("qty",     "Qty",         "qty",       55,  "e",      True),
+        ("cost",    "Upfront",     "cost",      100, "e",      True),
         ("profit",  "Est. profit", "profit",    88,  "e",      True),
         ("volume",  "Vol 1h",      "volume",    75,  "e",      True),
         ("age",     "Last trade",  "age",       88,  "e",      False),
@@ -2472,7 +2478,8 @@ class OSRSTrackerApp:
             "margin check), minus the 2% GE tax. Last trade = "
             "age of the older side (⏱ = over 5 min). Qty is "
             "capped by your capital, the "
-            "4h limit, and ~4h of market volume. Estimates "
+            "4h limit, and ~4h of market volume. Upfront = "
+            "Buy × Qty, the gp tied up to fill it. Estimates "
             "only: offers can take time to fill and margins "
             "close quickly. Inactive = a side has not traded in "
             "the last hour. Double-click a row to open it in "
@@ -2627,6 +2634,7 @@ class OSRSTrackerApp:
                 fmt(r["tax"]), fmt(r["net"]), f"{r['roi']:.1f}%",
                 fmt(r["limit"]) if r["limit"] else "?",
                 fmt(r["qty"]) if r["qty"] else "-",
+                fmt(r["cost"]) if r["qty"] else "-",
                 fmt(r["profit"]) if r["qty"] else "-",
                 self._volume_text(r["item_id"], r["volume"], fmt),
                 fmt_last_trade(r["traded_at"]),

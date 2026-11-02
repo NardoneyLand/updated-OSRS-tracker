@@ -382,6 +382,7 @@ class MarketTools:
             "active_alerts": [{
                 "name": a["item_name"], "buy": a["buy"], "sell": a["sell"],
                 "margin_after_tax": a["net"], "qty": a["qty"],
+                "total_cost": a["cost"],
                 "est_profit": a["profit"], "roi_pct": a["roi"],
                 "alerted_seconds_ago": int(now - a["timestamp"]),
                 "prices_age_seconds": int(now - a["updated"]),

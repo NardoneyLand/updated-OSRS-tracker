@@ -3,6 +3,20 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.4.6 — 2026-11-01
+
+**New**
+- FlipRec and Alerts have an Upfront column: Buy × Qty, the gp you need up front to
+  buy the whole quantity. You can sort by it, and Ask AI sees it on alerts too.
+
+**Changed**
+- The app opens wider, at 1380 pixels, so every FlipRec column fits. Narrower windows
+  and smaller screens get the sideways scrollbar.
+
+**Fixed**
+- Exact prices of 8 and 9 digits, such as 133,125,702, are no longer cut off on
+  FlipRec.
+
 ## 1.4.5 — 2026-11-01
 
 **Fixed**

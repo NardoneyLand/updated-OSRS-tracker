@@ -110,22 +110,22 @@ def scenario():
         wide_values = {}
 
         # Full size: looks as it always has
-        resize("1250x860")
+        resize("1380x860")
         for name, tab, tree in tabs:
             app.notebook.select(tab)
             settle()
-            check(not scrollbar_of(tab).winfo_ismapped(), f"{name} at 1250: no scrollbar")
+            check(not scrollbar_of(tab).winfo_ismapped(), f"{name} at 1380: no scrollbar")
             wide_values[name] = tree.column(tree["columns"][0], "width")
         app.notebook.select(app.fliprec_tab)
         settle()
         flip_actions = app.flip_refresh_btn.master
-        check(flip_actions.grid_info()["row"] == 0, "FlipRec at 1250: Refresh stays on the one row")
+        check(flip_actions.grid_info()["row"] == 0, "FlipRec at 1380: Refresh stays on the one row")
         y = app.flip_refresh_btn.winfo_rooty()
         app.flip_status.set("Fetching…")
         settle()
         app.flip_status.set("Capital must look like 5m, 250k or 1,000,000.")
         settle()
-        check(app.flip_refresh_btn.winfo_rooty() == y, "FlipRec at 1250: a changing status doesn't make it jump")
+        check(app.flip_refresh_btn.winfo_rooty() == y, "FlipRec at 1380: a changing status doesn't make it jump")
         app.flip_status.set("")
 
         # Smallest window
@@ -151,7 +151,7 @@ def scenario():
 
         # A long status wraps instead of being cut off
         long_status = "Error: " + "the server said no " * 12
-        for size in ("900x560", "1120x560", "1250x860"):
+        for size in ("900x560", "1120x560", "1380x860"):
             resize(size)
             app.flip_status.set(long_status)
             settle()
@@ -178,11 +178,11 @@ def scenario():
         tree = app.news_tree
         check(not scrollbar_of(app.news_tab).winfo_ismapped() and tree.xview() == (0.0, 1.0),
               f"News at 900: every column fits: {tree.xview()}")
-        resize("1250x860")
+        resize("1380x860")
         app.notebook.select(app.news_tab)
         settle()
         check(tree.column("title", "width") > 700 and tree.column("date", "width") == 140,
-              f"News at 1250: titles take the spare room: {tree.column('title', 'width')}")
+              f"News at 1380: titles take the spare room: {tree.column('title', 'width')}")
         resize("900x560")
 
         # A refresh doesn't undo where you've scrolled to
@@ -197,16 +197,16 @@ def scenario():
         app.alerts_tree.xview_moveto(0)
 
         # And back to full size, with everything undone
-        resize("1250x860")
+        resize("1380x860")
         for name, tab, tree in tabs:
             app.notebook.select(tab)
             settle()
-            check(not scrollbar_of(tab).winfo_ismapped(), f"{name} back at 1250: the scrollbar has gone")
+            check(not scrollbar_of(tab).winfo_ismapped(), f"{name} back at 1380: the scrollbar has gone")
             check(tree.column(tree["columns"][0], "width") == wide_values[name],
-                  f"{name} back at 1250: columns return to their size")
+                  f"{name} back at 1380: columns return to their size")
         app.notebook.select(app.fliprec_tab)
         settle()
-        check(flip_actions.grid_info()["row"] == 0, "FlipRec back at 1250: Refresh is back on the one row")
+        check(flip_actions.grid_info()["row"] == 0, "FlipRec back at 1380: Refresh is back on the one row")
     except Exception:
         traceback.print_exc()
         failures.append("crashed")

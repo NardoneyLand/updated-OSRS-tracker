@@ -141,9 +141,14 @@ def rows():
     return [app.alerts_tree.item(i, "values") for i in app.alerts_tree.get_children() if i in app.alert_id_map]
 
 
+def col(name):
+    """Where a column is, so adding one doesn't move what these checks read."""
+    return next(i for i, c in enumerate(gui.OSRSTrackerApp.ALERT_COLUMNS) if c[0] == name)
+
+
 def steady(table):
     """Rows without Last trade, whose age ticks up by itself every second."""
-    age = next(i for i, c in enumerate(gui.OSRSTrackerApp.ALERT_COLUMNS) if c[0] == "age")
+    age = col("age")
     return [row[:age] + row[age + 1:] for row in table]
 
 
@@ -170,7 +175,7 @@ def scenario():
         check(len(r) == 1 and r[0][0] == "Abyssal whip", "flip fires an alert")
         check("(1)" in app.notebook.tab(app.alerts_tab, "text"), "tab count")
         check("1 new" in app.alerts_status.get() and "next check in 1 min" in app.alerts_status.get(), "status: " + app.alerts_status.get())
-        profit_before = r[0][5]
+        profit_before = r[0][col("profit")]
 
         # Timer scheduled once at the chosen rate
         jobs = root.tk.call("after", "info")
@@ -182,8 +187,8 @@ def scenario():
         MARKET["latest"]["1"] = trade(2_300_000, 1_900_000)
         check_now()
         r = rows()
-        check(r[0][5] != profit_before, f"price change shows up without a new alert ({profit_before} -> {r[0][5]})")
-        check("0 new" in app.alerts_status.get() and r[0][10] == "1", "refresh isn't a new alert")
+        check(r[0][col("profit")] != profit_before, f"price change shows up without a new alert ({profit_before} -> {r[0][col("profit")]})")
+        check("0 new" in app.alerts_status.get() and r[0][col("hits")] == "1", "refresh isn't a new alert")
         check(len(tree.selection()) == 1 and app.alert_id_map[tree.selection()[0]] == 1, "selection survives the refresh")
         grab_shot("shot_alerts_live.png")
 
@@ -199,7 +204,7 @@ def scenario():
         gui.flash_window = lambda r: flashes.append(1)
         MARKET["latest"]["1"] = trade(2_300_000, 1_900_000)
         check_now()
-        check(len(rows()) == 1 and rows()[0][10] == "1" and not flashes, "returning flip comes back quietly")
+        check(len(rows()) == 1 and rows()[0][col("hits")] == "1" and not flashes, "returning flip comes back quietly")
 
         # Item stops trading: expires
         t = trade(2_300_000, 1_900_000)
@@ -215,13 +220,13 @@ def scenario():
         gui.flash_window = real_flash
 
         # Threshold: raising hides, lowering brings back with no new alert
-        before = {x[0]: x[10] for x in rows()}
+        before = {x[0]: x[col("hits")] for x in rows()}
         app.alert_threshold_var.set("100,000,000")
         app._on_alert_threshold_changed()
         check(rows() == [], "raising the threshold hides alerts")
         app.alert_threshold_var.set("1,000,000")
         app._on_alert_threshold_changed()
-        check({x[0]: x[10] for x in rows()} == before, "lowering brings them back unchanged")
+        check({x[0]: x[col("hits")] for x in rows()} == before, "lowering brings them back unchanged")
 
         # Capital change applies straight away
         app.flip_capital_var.set("1m")

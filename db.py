@@ -284,6 +284,7 @@ def get_active_alerts() -> List[dict]:
     conn = get_connection()
     rows = conn.execute(
         "SELECT a.item_id, a.item_name, a.buy, a.sell, a.net, a.qty, "
+        "       a.buy * a.qty AS cost, "
         "       a.profit, a.roi, a.timestamp, a.traded_at, a.volume, "
         "       COALESCE(a.updated, a.timestamp) AS updated, c.n "
         "FROM profit_alerts a "
