@@ -287,7 +287,8 @@ HELP_SECTIONS = [
      "    5.  Add items you want to follow to your Watchlist from the "
      "Search tab.\n\n"
      "The tabs, left to right: FlipRec · Alerts · Watchlist · Volatile · "
-     "Search · Ask AI · News · Help."),
+     "Search · Ask AI · News · Help. If the window is too narrow for a table, "
+     "a sideways scrollbar appears under it."),
 
     ("FlipRec — flip recommendations",
      "FlipRec lists every item you could buy and immediately resell at a "
@@ -314,8 +315,9 @@ HELP_SECTIONS = [
      "what your capital buys, the 4h limit, and about 4 hours of market "
      "volume.\n"
      "    •  Upfront — Buy × Qty: the gp you need up front to buy the whole "
-     "Qty. With no Capital set, it assumes the full 4h limit. You can start "
-     "with less by buying fewer.\n"
+     "Qty. With no Capital set, Qty goes only by the 4h limit and volume, so "
+     "this can be more than you have. You can start with less by buying "
+     "fewer.\n"
      "    •  Est. profit — Net / item × Qty.\n"
      "    •  Vol 1h — units traded in the last hour on the slower side, "
      "which is what limits how fast a flip fills. ▲ means at least 3x its "
@@ -372,6 +374,7 @@ HELP_SECTIONS = [
      "    •  Only actively traded items count: both sides must have "
      "traded in the last 5 minutes. Suspect items are ignored, including "
      "margins the last 5 minutes' average prices don't back up.\n"
+     "    •  Upfront — Buy × Qty, the gp you need up front, as on FlipRec.\n"
      "    •  Last trade — how long ago the older side last traded. It keeps "
      "counting up between checks.\n"
      "    •  Each item alerts at most once an hour. \"Times\" counts how "

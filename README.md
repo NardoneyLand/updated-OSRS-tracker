@@ -2,7 +2,8 @@
 
 A desktop app for finding profitable Old School RuneScape Grand Exchange
 flips (after the GE tax), alerting you to big opportunities, and tracking
-prices and news. Tkinter GUI, distributed as a macOS `.app` bundle and a Windows `.exe`.
+prices and news. Built with Tkinter, with a Windows installer and a macOS disk image
+on the Releases page.
 
 Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** · **Ask AI** · **News** · **Help**
 
@@ -10,8 +11,8 @@ Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** �
 
 ## Features
 
-- **FlipRec** — every item you can buy and resell at a profit after the 2% GE tax, priced like an in-game margin check. Capital-aware quantity and profit estimates, buy limits, volume, last-trade age, Profitable / Marginal / Suspect / Inactive verdicts, and a note on how far the price is from its 1-hour average.
-- **Profit alerts** — checks the market every 1, 5, 15 or 30 minutes (1 by default) and alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and taskbar flash. Alerts keep updating with live prices and disappear once the flip stops qualifying.
+- **FlipRec** — every item you can buy and resell at a profit after the 2% GE tax, priced like an in-game margin check. Capital-aware quantity and profit estimates, the gp you need up front, buy limits, volume, last-trade age, Profitable / Marginal / Suspect / Inactive verdicts, and a note on how far the price is from its 1-hour average.
+- **Profit alerts** — checks the market every 1, 5, 15 or 30 minutes (1 by default) and alerts when a flip's estimated profit passes your threshold (1M by default), with a tab count and, on Windows, a taskbar flash. Alerts keep updating with live prices and disappear once the flip stops qualifying.
 - **Watchlist** — add items from Search, follow their live margins, and set target prices to be alerted when an item's Buy price falls to one or its Sell price rises to one.
 - **Volatile scanner** — the biggest movers across the whole GE over 5m / 1h / 6h / 24h.
 - **Item search + price chart** — autocomplete lookup with the item's recent price move, volume and momentum, plus the item's price chart (1H to 1 year, backed by the OSRS Wiki's history) on the same page.
@@ -25,12 +26,15 @@ Tabs: **FlipRec** · **Alerts** · **Watchlist** · **Volatile** · **Search** �
 
 Grab the latest release from the [Releases page](https://github.com/NardoneyLand/updated-OSRS-tracker/releases):
 
-- **macOS** — pick the `.dmg`, drag `OSRS Tracker.app` to `/Applications`. First launch, macOS may flag the unsigned build: right-click the app → **Open** → **Open** to allow it once.
-- **Windows** — download `OSRS-Tracker-Setup-<version>.exe` and run it (installs per-user, adds a Start Menu entry and uninstaller). SmartScreen may warn about an unrecognized publisher: click "More info" → "Run anyway" to allow it once.
+- **macOS (Apple Silicon only)** — download `OSRS-Tracker-<version>.dmg` and drag `OSRS Tracker.app` to Applications. The build is unsigned, so macOS blocks it the first time. On macOS 15 or later, try to open it, then go to **System Settings → Privacy & Security** and click **Open Anyway**. On older versions, right-click the app → **Open** → **Open**.
+- **Windows** — download `OSRS-Tracker-Setup-<version>.exe` and run it. By default it installs for your user only, without admin rights, and adds a Start Menu entry, an uninstaller and an optional desktop shortcut. SmartScreen may warn about an unrecognized publisher: click "More info" → "Run anyway" to allow it once.
+
+On first launch the app asks for a contact, such as a Discord name or email, because the OSRS Wiki asks apps using its prices to send one. Then open FlipRec and enter your gp in Capital. The Help tab explains everything else.
 
 App data lives in:
 - macOS: `~/Library/Application Support/OSRS Tracker/`
 - Windows: `%APPDATA%\OSRS Tracker\` (i.e. `C:\Users\<you>\AppData\Roaming\OSRS Tracker\`)
+- Running from source: the project folder
 
 ---
 
@@ -38,7 +42,7 @@ App data lives in:
 
 ### macOS
 
-Requires Homebrew Python 3.12 with Tk:
+Requires an Apple Silicon Mac with Homebrew Python 3.12 and Tk (the scripts look for it in `/opt/homebrew`):
 
 ```bash
 brew install python@3.12 python-tk@3.12
@@ -68,6 +72,17 @@ If PowerShell blocks the script with a security warning, either run it once with
 or unblock scripts for your user with
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
+### Tests
+
+Run a launch script once to create `.venv`, then:
+
+```bash
+.venv/bin/python tests/run_all.py          # macOS
+.venv\Scripts\python tests\run_all.py      # Windows
+```
+
+The tests use temporary settings, a temporary database and fake market and AI servers, so they don't touch your data or need an API key. `test_ai` adds and removes one throwaway entry in the system credential store. On Windows, their windows stay on a hidden desktop.
+
 ---
 
 ## Build a release binary
@@ -78,47 +93,39 @@ or unblock scripts for your user with
 ./build.sh                # produces dist/OSRS Tracker.app
 ```
 
-Optional icon: drop a square `icon.png` / `icon.jpg` at the project root before building. `build.sh` runs `make_icns.sh` to convert it to a Mac `.icns` and bundles it.
+The icon comes from `icon.jpg` in the project root. To change it, replace that file or add a square `icon.png`, which takes priority. `build.sh` runs `make_icns.sh` to convert it to a Mac `.icns` and bundles it.
 
 ### Windows — `.exe`
 
 ```powershell
-.\build.ps1               # produces dist\OSRS Tracker.exe (single file, ~25-40 MB)
+.\build.ps1               # produces dist\OSRS Tracker.exe (single file)
 ```
 
-Optional icon: drop a square `icon.png` / `icon.jpg` at the project root before building. `build.ps1` uses Pillow (installed only into `.venv`) to convert it to `icon.ico` automatically. Or supply your own `icon.ico`.
+The icon comes from `icon.jpg` in the project root. To change it, replace that file or add a square `icon.png`, which takes priority. `build.ps1` uses Pillow (installed only into `.venv`) to convert it to `icon.ico` whenever that file is missing or older than the image.
 
 ---
 
 ## Cut a release
 
-### macOS
-
-One-time setup:
-
-```bash
-brew install create-dmg gh
-gh auth login
-```
-
-Then per release:
+1. Add the new version to [CHANGELOG.md](CHANGELOG.md) and commit it.
+2. Run the tests. The release workflow doesn't run them.
+3. Push a version tag:
 
 ```bash
-./release.sh v1.0.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
-This builds the `.app`, packages it as both a `.zip` and a `.dmg`, and publishes to GitHub Releases under the given tag.
+GitHub Actions ([release.yml](.github/workflows/release.yml)) then builds the Windows installer (from `installer.iss`, with Inno Setup) and the Apple Silicon `.dmg`, and publishes both as a Release. It sets the app's version from the tag. `version.py` stays at 1.0.0 in the repo, so running from source shows that number.
 
-### Automated (Windows installer + macOS .dmg)
-
-Push a version tag; GitHub Actions ([release.yml](.github/workflows/release.yml)) builds both and attaches them to a Release:
+### Package locally on macOS
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+brew install create-dmg   # optional: without it you only get the .zip
+./release.sh
 ```
 
-The Windows installer is built from `installer.iss` with Inno Setup; the macOS `.dmg` is Apple Silicon only.
+This builds the `.app` and packages it in `dist/`, for testing only. Don't publish with `./release.sh vX.Y.Z`: it doesn't set the version or build the Windows installer, and Check for updates doesn't recognize its file names.
 
 ---
 
@@ -127,25 +134,31 @@ The Windows installer is built from `installer.iss` with Inno Setup; the macOS `
 ```
 gui.py              Tkinter app — entry point
 api.py              OSRS Wiki Prices API wrapper
-db.py               SQLite layer (price history, alerts, news cache)
+db.py               SQLite layer (price history, alerts, watchlist, news cache, volumes)
 search.py           Fuzzy item search
 analyzer.py         Trend, market facts, flip and volatility logic
 ai.py               Ask AI: API keys and the chat loops for each kind of API
 aitools.py          Ask AI: the read-only data lookups the AI can call
 volume.py           Rolling 1h / 12h / 24h volumes built from the Wiki's bulk data
 scraper.py          OSRS news RSS scraper
+settings.py         Reads and saves settings.json, and protects it from failed reads and writes
+updater.py          Check for updates, using GitHub Releases
+useragent.py        The User-Agent sent to the OSRS Wiki and news feed
+applog.py           Writes osrs_tracker.log
+version.py          App version, set from the git tag when a release is built
 paths.py            Resolves writable data directory (dev vs. bundled)
 
 OSRS_Tracker.spec   PyInstaller config (cross-platform)
-launch.sh           venv setup + run         (macOS / Linux)
+launch.sh           venv setup + run         (macOS)
 launch.ps1          venv setup + run         (Windows)
 build.sh            venv setup + .app build  (macOS)
 build.ps1           venv setup + .exe build  (Windows)
 find-python.ps1     shared Python 3.10+ discovery (used by the .ps1 scripts)
-release.sh          build + .zip + .dmg + (optional) GitHub publish (macOS)
+installer.iss       Windows installer (Inno Setup), built by the release workflow
+release.sh          build + .zip + .dmg for local testing (macOS)
 make_icns.sh        Convert icon source to .icns (macOS)
 requirements.txt    Python deps
-tests/              Tests: python tests/run_all.py (windows stay on a hidden desktop)
+tests/              Tests: see "Tests" above
 tests/backtest.py   Replays a Buy/Sell rule over real history. Run it before adding one.
 ```
 
@@ -156,13 +169,14 @@ tests/backtest.py   Replays a Buy/Sell rule over real history. Run it before add
 - Prices: [OSRS Wiki Prices API](https://prices.runescape.wiki/) — public, no key, ~60s upstream refresh. The Wiki asks apps to send a descriptive User-Agent with a contact. On first launch the app asks each user for their own contact (Discord name, email, …) and sends `OSRS-Price-Tracker/<version> (contact: …)`; it can be changed later from the Help tab. See `useragent.py`.
 - News: official OSRS RSS at `secure.runescape.com/m=news/latest_news.rss?oldschool=1`.
 - Ask AI: [Anthropic](https://platform.claude.com/docs), [OpenAI](https://developers.openai.com/api/docs), [OpenRouter](https://openrouter.ai/docs) or any OpenAI-compatible URL, with the user's own key, which is stored in the OS credential store (see `ai.py`). Until the user asks a question, the only requests to the chosen service are a check of a newly saved key and, for OpenRouter and OpenAI-compatible services, fetching the model list.
+- Updates: GitHub Releases, only when the user clicks Check for updates. The request sends only the app name and version.
 
 ---
 
 ## Updates and troubleshooting
 
 - **What's new:** see the [changelog](CHANGELOG.md).
-- **Help → Check for updates** looks for a newer GitHub release. On Windows it downloads the installer and updates the app in place; on macOS it opens the new `.dmg`.
+- **Help → Check for updates** looks for a newer GitHub release. On Windows it downloads the installer and updates the app in place; on macOS it opens the new `.dmg`, and you quit the app and drag the new version to Applications. When running from source, it offers to open the download page.
 - **Help → Open data folder** opens your settings, watchlist, alerts, price history and `osrs_tracker.log`. If something goes wrong, attach that log to a GitHub issue.
 
 ---

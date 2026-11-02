@@ -1,13 +1,14 @@
 """
 Run every test: python tests/run_all.py
 
-These drive the real app, so windows open and close while they run. They use
-temporary settings and a temporary database, and fake market and AI servers, so
-they don't touch your data or need an API key. test_ai adds and removes one
+These drive the real app. On Windows its windows stay on a hidden desktop. They
+use temporary settings and a temporary database, and fake market and AI servers,
+so they don't touch your data or need an API key. test_ai adds and removes one
 throwaway entry in the system credential store.
 
 Set OSRS_LIVE=1 to also make the few free checks against the real OpenRouter
-model list. Set OSRS_TEST_SHOTS=1 to save screenshots (needs Pillow).
+model list. Set OSRS_TEST_SHOTS=1 to save screenshots (needs Pillow). That shows
+the windows on your normal desktop.
 """
 
 import glob
