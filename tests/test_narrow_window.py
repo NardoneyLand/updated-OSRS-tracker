@@ -153,6 +153,22 @@ def scenario():
         combos = [w for group in limits_bar.winfo_children() for w in group.winfo_children() if w.winfo_class() == "TCombobox"]
         check(len(combos) == 3 and all(right_edge(w, limits_bar) <= limits_bar.winfo_width() for w in combos), f"FlipRec at 900: Show, Traded within and Min Vol 1h all fit: {[right_edge(w, limits_bar) for w in combos]} of {limits_bar.winfo_width()}")
 
+        # Search: the longest Back button still leaves the search bar usable
+        size_before = root.geometry().split("+")[0]
+        resize("900x680")
+        app.notebook.select(app.ignored_tab)
+        settle()
+        app._open_in_search(1)
+        settle()
+        back = app.search_back_btn
+        check(back.winfo_ismapped() and app.search_entry.winfo_width() >= 150
+              and all(right_edge(w, back.master) <= back.master.winfo_width() and w.winfo_width() >= min(w.winfo_reqwidth(), 150)
+                      for w in back.master.winfo_children() if w.winfo_ismapped()),
+              f"Search at 900: Back fits the bar, search box {app.search_entry.winfo_width()}px")
+        app.notebook.select(app.fliprec_tab)
+        settle()
+        resize(size_before)
+
         # Search: Alch moves under the Volume table rather than being cut off
         app.notebook.select(app.search_tab)
         app._lookup_item(MAPPING[1])

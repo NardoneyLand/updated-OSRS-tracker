@@ -562,6 +562,8 @@ HELP_SECTIONS = [
      "shows all Bandos gear, 'Bandos chest' narrows it down. Click a "
      "row, or press Enter for the top match; Escape closes the "
      "dropdown.\n\n"
+     "If a row on another tab opened the item, a Back button beside the search "
+     "box returns you to that tab. It goes away when you leave Search.\n\n"
      "The result panel shows:\n"
      "    •  Buy, Sell, Qty, ROI, Upfront, Est. profit and Vol 1h — the same "
      "values as the tables.\n"
@@ -1375,12 +1377,16 @@ class OSRSTrackerApp:
         bar = ttk.Frame(frame)
         bar.pack(side="top", fill="x", padx=20, pady=(20, 4))
 
-        ttk.Label(bar, text="Search:", style="TLabel").pack(side="left",
-                                                            padx=(0, 8))
+        self.search_label = ttk.Label(bar, text="Search:", style="TLabel")
+        self.search_label.pack(side="left", padx=(0, 8))
+        # Shown only while there's a tab to go back to.
+        self.search_back_btn = ttk.Button(bar, command=self._search_back)
+        self._search_back_tab = None
 
         self.search_var = tk.StringVar()
+        # Grows to fill the bar; a small request lets it give way in a narrow window.
         self.search_entry = ttk.Entry(bar, textvariable=self.search_var,
-                                      state="disabled", width=50,
+                                      state="disabled", width=20,
                                       font=FONT_BODY)
         self.search_entry.pack(side="left", fill="x", expand=True,
                                padx=(0, 16))
@@ -2926,10 +2932,24 @@ class OSRSTrackerApp:
                      if it.get("id") == item_id), None) if item_id else None
         if not item:
             return
+        self._show_search_back(self.notebook.select())
         self.notebook.select(self.search_tab)
         self.search_var.set(item["name"])
         self._hide_dropdown()
         self._lookup_item(item)
+
+    def _show_search_back(self, tab):
+        """Offer a way back to the tab that opened an item, until Search is left."""
+        if tab == str(self.search_tab):
+            return
+        self._search_back_tab = tab
+        name = self.notebook.tab(tab, "text").split(" (")[0]   # without its count
+        self.search_back_btn.config(text=f"← Back to {name}")
+        self.search_back_btn.pack(side="left", padx=(0, 12),
+                                  before=self.search_label)
+
+    def _search_back(self):
+        self.notebook.select(self._search_back_tab)
 
     # ── Volatile tab ──────────────────────────────────────────────────────────
 
@@ -4561,6 +4581,8 @@ class OSRSTrackerApp:
 
     def _on_tab_changed(self, _event):
         tab = self.notebook.nametowidget(self.notebook.select())
+        if tab is not self.search_tab:
+            self.search_back_btn.pack_forget()
         if tab is self.search_tab:
             if self.item_data:
                 self.search_entry.focus_set()

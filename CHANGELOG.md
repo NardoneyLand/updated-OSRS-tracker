@@ -3,6 +3,12 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.6 — 2026-11-03
+
+**Added**
+- Opening an item in Search from a row on another tab now shows a Back button beside the
+  search box, which returns you to that tab. It goes away when you leave Search.
+
 ## 1.6.5 — 2026-11-03
 
 **Added**
