@@ -264,31 +264,32 @@ def scenario():
             return [w] + [d for c in w.winfo_children() for d in widgets(c)]
         boxes = [w for w in widgets(app.fliprec_tab) if w.winfo_class() == "TCheckbutton"
                  and w.cget("text") == gui.FLASH_LABEL]
-        check(len(boxes) == 1 and app.alert_flash_var.get() is True, "the checkbox is on FlipRec, on by default")
-        boxes[0].invoke()
-        check(settings.load()["alert_flash"] is False, "turning it off is saved")
+        check(len(boxes) == (1 if gui.FLASH_LABEL else 0) and app.alert_flash_var.get() is True, "the checkbox is on FlipRec, on by default")
+        if boxes:
+            boxes[0].invoke()
+            check(settings.load()["alert_flash"] is False, "turning it off is saved")
 
-        def alert_again():
-            # Forget the alert, so the next evaluation finds it new again.
-            conn = db.get_connection()
-            conn.execute("DELETE FROM profit_alerts WHERE item_id = 3")
-            conn.commit(); conn.close()
-            flashes.clear()
-        alert_again()
-        check_now()
-        check(not flashes, "a market check doesn't flash with it off")
-        check(any(x[0] == "Bandos tassets" for x in rows()) and app.notebook.tab(app.fliprec_tab, "text") == "FlipRec (2)", "but the alert still shows and counts")
-        alert_again()
-        app._apply_flip_filters()
-        settle()
-        check(not flashes, "nor does changing a filter")
-        alert_again()
-        app._on_alert_threshold_changed()
-        check(not flashes, "nor does changing the threshold")
-        source = open(gui.__file__, encoding="utf-8").read()
-        check(source.count("flash_window(self.root)") == 1, "every flash goes through the checkbox")
-        boxes[0].invoke()
-        check(settings.load()["alert_flash"] is True, "turning it back on is saved")
+            def alert_again():
+                # Forget the alert, so the next evaluation finds it new again.
+                conn = db.get_connection()
+                conn.execute("DELETE FROM profit_alerts WHERE item_id = 3")
+                conn.commit(); conn.close()
+                flashes.clear()
+            alert_again()
+            check_now()
+            check(not flashes, "a market check doesn't flash with it off")
+            check(any(x[0] == "Bandos tassets" for x in rows()) and app.notebook.tab(app.fliprec_tab, "text") == "FlipRec (2)", "but the alert still shows and counts")
+            alert_again()
+            app._apply_flip_filters()
+            settle()
+            check(not flashes, "nor does changing a filter")
+            alert_again()
+            app._on_alert_threshold_changed()
+            check(not flashes, "nor does changing the threshold")
+            source = open(gui.__file__, encoding="utf-8").read()
+            check(source.count("flash_window(self.root)") == 1, "every flash goes through the checkbox")
+            boxes[0].invoke()
+            check(settings.load()["alert_flash"] is True, "turning it back on is saved")
         gui.flash_window = real_flash
 
         # Each system gets its own signal, and a refusal from Tk is harmless
@@ -313,6 +314,39 @@ def scenario():
             check(calls == [], "other systems do nothing")
         finally:
             sys.platform = real_platform
+
+        # The chart zooms with the wheel, however the system reports it
+        from types import SimpleNamespace
+        spans = []
+        real_view = app._set_chart_view
+        app._set_chart_view = lambda start, stop: spans.append(stop - start)
+        app._chart_geom = {"full": (0, 1000), "view": (0, 1000), "min_span": 10, "left": 0, "width": 100}
+        app._on_chart_wheel(SimpleNamespace(x=50, delta=0), 120)
+        check(spans and spans[-1] < 1000, f"up zooms in: {spans}")
+        app._on_chart_wheel(SimpleNamespace(x=50, delta=0), -120)
+        check(spans[-1] > 1000, f"down zooms out: {spans}")
+        if sys.platform == "linux":
+            spans.clear()
+            app.notebook.select(app.search_tab)
+            settle()
+            app._chart_geom = {"full": (0, 1000), "view": (0, 1000), "min_span": 10, "left": 0, "width": 100}
+            app.history_canvas.event_generate("<Button-4>", x=50, y=50)
+            app.history_canvas.event_generate("<Button-5>", x=50, y=50)
+            root.update()
+            app.notebook.select(app.fliprec_tab)
+            settle()
+            check(len(spans) == 2 and spans[0] < 1000 < spans[1], f"Linux's wheel buttons zoom the chart: {spans}")
+            spin = [w for w in widgets(app.fliprec_tab) if w.winfo_class() == "TSpinbox"][0]
+            app.alert_threshold_var.set("1,000,000")
+            spin.event_generate("<Button-4>")
+            root.update()
+            check(app.alert_threshold_var.get() != "1,000,000", f"and step the threshold: {app.alert_threshold_var.get()}")
+            spin.event_generate("<Button-5>")
+            root.update()
+            check(app.alert_threshold_var.get() == "1,000,000", f"both ways: {app.alert_threshold_var.get()}")
+            settle()
+        app._set_chart_view = real_view
+        app._chart_geom = None
 
         # Threshold: raising hides, lowering brings back with no new alert
         before = {x[0] for x in rows()}

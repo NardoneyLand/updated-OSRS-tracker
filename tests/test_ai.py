@@ -219,10 +219,13 @@ print("verify ok")
 # Credential store round trip under a throwaway provider name
 tp = "UnitTest-delete-me"
 assert ai.get_key(tp) is None
-assert ai.save_key(tp, "sk-test-roundtrip-000000") is True
-assert ai.get_key(tp) == "sk-test-roundtrip-000000"
+import keyring
+from keyring.backends import fail
+has_store = not isinstance(keyring.get_keyring(), fail.Keyring)  # Linux may have none
+assert ai.save_key(tp, "sk-test-roundtrip-000000") is has_store
+assert ai.get_key(tp) == "sk-test-roundtrip-000000"   # in the session, if nowhere else
 ai.delete_key(tp)
 assert ai.get_key(tp) is None
 ai.delete_key(tp)    # deleting twice is harmless
-print("keyring ok")
+print("keyring ok" if has_store else "no credential store: the key lasted the session")
 print("ALL PASSED")

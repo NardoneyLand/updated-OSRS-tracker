@@ -3,6 +3,19 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.5 — 2026-11-03
+
+**Added**
+- The app now runs on Linux from source: `./launch.sh` sets it up and says what to
+  install if something is missing. Tested on Ubuntu 24.04 in a container, not yet on a
+  real desktop.
+- A checkbox beside the alert threshold turns off the alert flash. Alerts still show and
+  count with it off.
+- On macOS, alerts and met targets now bounce the Dock icon.
+
+**Fixed**
+- The tests can now start on macOS.
+
 ## 1.6.4 — 2026-11-02
 
 **Fixed**

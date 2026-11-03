@@ -187,7 +187,8 @@ def scenario():
             settle()
             check(right_edge(label, bar) <= bar.winfo_width() and label.winfo_height() > 25,
                   f"FlipRec at {size}: a long status wraps inside the bar: {right_edge(label, bar)} of {bar.winfo_width()}")
-            check(label.winfo_width() >= label.winfo_reqwidth(), f"FlipRec at {size}: and shows in full")
+            # Linux can wrap a pixel or two past the wrap length, within the label's padding.
+            check(label.winfo_width() >= label.winfo_reqwidth() - 2, f"FlipRec at {size}: and shows in full")
             check(right_edge(refresh, bar) <= bar.winfo_width(), f"FlipRec at {size}: without moving Refresh off screen")
         app.market_status.set("Prices fetched at 12:00:00")
         resize("900x560")

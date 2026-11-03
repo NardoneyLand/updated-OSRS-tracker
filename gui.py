@@ -108,12 +108,19 @@ COLOR_YELLOW   = "#f0b32c"   # gold (same as accent)
 COLOR_BLUE     = "#5b9aa0"   # muted teal
 COLOR_INPUT    = "#1f1610"   # dark input fill
 
-FONT_HEADER = ("Georgia", 18, "bold")
-FONT_TITLE  = ("Georgia", 16, "bold")
-FONT_LABEL  = ("Helvetica", 12)
-FONT_VALUE  = ("Helvetica", 12, "bold")
-FONT_BODY   = ("Helvetica", 11)
-FONT_SMALL  = ("Helvetica", 9)
+# Linux rarely has Georgia or Helvetica, and what it substitutes is wide enough
+# to overflow the columns. Liberation Sans is the same design as the Arial that
+# Windows uses for Helvetica, though it draws about 10% wider, so table text is
+# a size smaller there.
+LINUX = sys.platform == "linux"
+SERIF, SANS = (("Liberation Serif", "Liberation Sans") if LINUX
+               else ("Georgia", "Helvetica"))
+FONT_HEADER = (SERIF, 18, "bold")
+FONT_TITLE  = (SERIF, 16, "bold")
+FONT_LABEL  = (SANS, 12)
+FONT_VALUE  = (SANS, 12, "bold")
+FONT_BODY   = (SANS, 10 if LINUX else 11)
+FONT_SMALL  = (SANS, 9)
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
@@ -233,7 +240,9 @@ def fmt_volume_pace(facts: dict) -> str:
 
 # ── Taskbar flash ─────────────────────────────────────────────────────────────
 
-FLASH_LABEL = "Bounce Dock icon" if sys.platform == "darwin" else "Flash taskbar"
+# None where there's no signal for a checkbox to turn off.
+FLASH_LABEL = {"win32": "Flash taskbar",
+               "darwin": "Bounce Dock icon"}.get(sys.platform)
 
 
 def flash_window(root: tk.Tk):
@@ -712,7 +721,8 @@ HELP_SECTIONS = [
      "automatically, along with your watchlist, target prices, Ignored List, "
      "alerts and price history. They're stored on your computer in:\n\n"
      "    •  Windows: %APPDATA%\\OSRS Tracker\n"
-     "    •  macOS: ~/Library/Application Support/OSRS Tracker\n\n"
+     "    •  macOS: ~/Library/Application Support/OSRS Tracker\n"
+     "    •  Running from source, including on Linux: the project folder\n\n"
      "If settings can't be saved, such as when another program has the file "
      "open, a red message appears at the top of the app. Your changes still "
      "apply, the next setting you change saves them too, and your other settings "
@@ -1085,6 +1095,10 @@ class OSRSTrackerApp:
             style.theme_use("clam")
         except tk.TclError:
             pass
+        if LINUX:
+            # Fields and menus use these. Windows' are narrower than Linux's.
+            for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
+                tkfont.nametofont(name).configure(family=SANS, size=9)
 
         # Frames
         style.configure("TFrame", background=COLOR_BG)
@@ -1112,7 +1126,7 @@ class OSRSTrackerApp:
                         foreground=COLOR_TEXT, font=FONT_VALUE)
         style.configure("PanelHeader.TLabel", background=COLOR_PANEL,
                         foreground=COLOR_ACCENT,
-                        font=("Georgia", 12, "bold"))
+                        font=(SERIF, 12, "bold"))
 
         # Buttons
         style.configure("TButton",
@@ -1121,7 +1135,7 @@ class OSRSTrackerApp:
                         bordercolor=COLOR_BORDER,
                         focuscolor=COLOR_ACCENT,
                         padding=(12, 6),
-                        font=("Helvetica", 11, "bold"))
+                        font=(SANS, FONT_BODY[1], "bold"))
         style.map("TButton",
                   background=[("active", COLOR_BORDER),
                               ("pressed", COLOR_PANEL)],
@@ -1182,7 +1196,7 @@ class OSRSTrackerApp:
                         background=COLOR_PANEL,
                         foreground=COLOR_DIM,
                         padding=(12, 8),
-                        font=("Georgia", 11, "bold"),
+                        font=(SERIF, 11, "bold"),
                         bordercolor=COLOR_BORDER)
         style.map("TNotebook.Tab",
                   background=[("selected", COLOR_PANEL_HI)],
@@ -1200,7 +1214,7 @@ class OSRSTrackerApp:
         style.configure("Treeview.Heading",
                         background=COLOR_PANEL_HI,
                         foreground=COLOR_ACCENT,
-                        font=("Georgia", 10, "bold"),
+                        font=(SERIF, 10, "bold"),
                         bordercolor=COLOR_BORDER,
                         padding=6)
         style.map("Treeview.Heading",
@@ -1454,6 +1468,11 @@ class OSRSTrackerApp:
         self.history_canvas.bind("<Configure>",
                                  lambda _e: self._draw_history_chart())
         self.history_canvas.bind("<MouseWheel>", self._on_chart_wheel)
+        if LINUX:   # Tk there reports the wheel as buttons
+            self.history_canvas.bind(
+                "<Button-4>", lambda e: self._on_chart_wheel(e, 120))
+            self.history_canvas.bind(
+                "<Button-5>", lambda e: self._on_chart_wheel(e, -120))
         self.history_canvas.bind("<ButtonPress-1>", self._on_chart_press)
         self.history_canvas.bind("<B1-Motion>", self._on_chart_drag)
         self.history_canvas.bind("<ButtonRelease-1>", self._on_chart_release)
@@ -3133,6 +3152,11 @@ class OSRSTrackerApp:
         # Mouse wheel steps the value too (ttk doesn't do this by default).
         spin.bind("<MouseWheel>", lambda e: (spin.event_generate(
             "<<Increment>>" if e.delta > 0 else "<<Decrement>>"), "break")[1])
+        if LINUX:   # Tk there reports the wheel as buttons
+            spin.bind("<Button-4>", lambda _e: (
+                spin.event_generate("<<Increment>>"), "break")[1])
+            spin.bind("<Button-5>", lambda _e: (
+                spin.event_generate("<<Decrement>>"), "break")[1])
         # React to every change (arrows, keyboard, wheel), debounced so
         # holding an arrow down doesn't re-query on every step.
         self._threshold_job = None
@@ -3142,11 +3166,12 @@ class OSRSTrackerApp:
                   ).pack(side="left", padx=(0, 10))
         self.alert_flash_var = tk.BooleanVar(
             value=prefs.get("alert_flash", True))
-        ttk.Checkbutton(controls, text=FLASH_LABEL,
-                        variable=self.alert_flash_var,
-                        command=lambda: self._save_settings(
-                            {"alert_flash": bool(self.alert_flash_var.get())})
-                        ).pack(side="left", padx=(0, 16))
+        if FLASH_LABEL:
+            ttk.Checkbutton(controls, text=FLASH_LABEL,
+                            variable=self.alert_flash_var,
+                            command=lambda: self._save_settings(
+                                {"alert_flash": bool(self.alert_flash_var.get())})
+                            ).pack(side="left", padx=(0, 16))
 
         ttk.Label(controls, text="Show:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
@@ -3708,7 +3733,7 @@ class OSRSTrackerApp:
         c.create_text(W / 2, MT / 2,
                       text=f"{name}  —  {range_label}  "
                            f"({len(visible)} points){zoomed}",
-                      fill=COLOR_ACCENT, font=("Georgia", 12, "bold"))
+                      fill=COLOR_ACCENT, font=(SERIF, 12, "bold"))
 
         # Axes
         c.create_line(ML, MT, ML, MT + plot_h, fill=COLOR_DIM)
@@ -3772,9 +3797,10 @@ class OSRSTrackerApp:
         self._chart_view = None
         self._render_chart()
 
-    def _on_chart_wheel(self, event):
+    def _on_chart_wheel(self, event, delta=None):
         g = self._chart_geom
-        if not g or not event.delta:
+        delta = delta or event.delta
+        if not g or not delta:
             return
         full_min, full_max = g["full"]
         full_span = full_max - full_min
@@ -3783,9 +3809,9 @@ class OSRSTrackerApp:
         # Windows sends ±120 per wheel notch; macOS sends small values,
         # many per trackpad swipe, so each one zooms only a little.
         if sys.platform == "darwin":
-            factor = 0.97 ** event.delta
+            factor = 0.97 ** delta
         else:
-            factor = 0.8 ** (event.delta / 120)
+            factor = 0.8 ** (delta / 120)
         t0, t1 = g["view"]
         span = (t1 - t0) * factor
         span = max(span, min(g["min_span"], full_span))
@@ -3908,7 +3934,7 @@ class OSRSTrackerApp:
             padx=20, pady=16, font=FONT_BODY)
         text.pack(fill="both", expand=True, padx=20, pady=(0, 10))
         text.tag_configure("speaker", foreground=COLOR_ACCENT,
-                           font=("Georgia", 12, "bold"), spacing1=10,
+                           font=(SERIF, 12, "bold"), spacing1=10,
                            spacing3=4)
         text.tag_configure("body", foreground=COLOR_TEXT, spacing3=4)
         text.tag_configure("note", foreground=COLOR_DIM, spacing3=4)
@@ -4425,7 +4451,7 @@ class OSRSTrackerApp:
         text.pack(fill="both", expand=True, padx=20, pady=20)
 
         text.tag_configure("h1", foreground=COLOR_ACCENT,
-                           font=("Georgia", 16, "bold"),
+                           font=(SERIF, 16, "bold"),
                            spacing1=14, spacing3=8)
         text.tag_configure("body", foreground=COLOR_TEXT,
                            font=FONT_BODY, spacing3=6, lmargin1=6, lmargin2=6)

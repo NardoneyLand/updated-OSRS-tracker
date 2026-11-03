@@ -3,7 +3,7 @@
 A desktop app for finding profitable Old School RuneScape Grand Exchange
 flips (after the GE tax), alerting you to big opportunities, and tracking
 prices and news. Built with Tkinter, with a Windows installer and a macOS disk image
-on the Releases page.
+on the Releases page. On Linux, it runs from source.
 
 Tabs: **FlipRec** · **Watchlist** · **Ignored List** · **Volatile** · **Search** · **Ask AI** · **News** · **Help**
 
@@ -56,6 +56,22 @@ cd updated-OSRS-tracker
 
 `launch.sh` creates a project-local `.venv`, installs deps, verifies Tk, and starts the GUI.
 
+### Linux
+
+Requires Python 3.10+ with Tk and venv support. Liberation fonts are recommended, because the columns are sized for them.
+
+```bash
+sudo apt install python3 python3-tk python3-venv fonts-liberation     # Ubuntu, Debian
+sudo dnf install python3 python3-tkinter liberation-fonts             # Fedora
+sudo pacman -S python tk ttf-liberation                               # Arch
+
+git clone https://github.com/NardoneyLand/updated-OSRS-tracker.git
+cd updated-OSRS-tracker
+./launch.sh
+```
+
+To save Ask AI keys, you need a credential store such as GNOME Keyring or KWallet, which most desktops include. Without one, a key lasts until you close the app. Linux has no alert flash, so alerts show only as the tab count. Check for updates offers the download page, so to update, run `git pull` and then `./launch.sh`.
+
 ### Windows
 
 Requires Python 3.10+ from [python.org](https://www.python.org/downloads/) (during install: check **Add python.exe to PATH** and keep **tcl/tk and IDLE** enabled).
@@ -81,6 +97,7 @@ Run a launch script once to create `.venv`, then:
 
 ```bash
 .venv/bin/python tests/run_all.py          # macOS
+xvfb-run -a .venv/bin/python tests/run_all.py   # Linux, off your screen
 .venv\Scripts\python tests\run_all.py      # Windows
 ```
 
@@ -152,7 +169,7 @@ version.py          App version, set from the git tag when a release is built
 paths.py            Resolves writable data directory (dev vs. bundled)
 
 OSRS_Tracker.spec   PyInstaller config (cross-platform)
-launch.sh           venv setup + run         (macOS)
+launch.sh           venv setup + run         (macOS, Linux)
 launch.ps1          venv setup + run         (Windows)
 build.sh            venv setup + .app build  (macOS)
 build.ps1           venv setup + .exe build  (Windows)

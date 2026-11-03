@@ -113,7 +113,8 @@ def right_click(tree, iid):
     tree.see(iid)
     root.update()
     x, y, w, h = tree.bbox(iid, tree["columns"][0])
-    tree.event_generate("<Button-3>", x=x + 5, y=y + h // 2)
+    # Near the row's top: see() can leave its bottom below the table.
+    tree.event_generate("<Button-3>", x=x + 5, y=y + 2)
     root.update()
     return menus[-1] if menus else None
 
