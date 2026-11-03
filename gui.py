@@ -233,8 +233,20 @@ def fmt_volume_pace(facts: dict) -> str:
 
 # ── Taskbar flash ─────────────────────────────────────────────────────────────
 
+FLASH_LABEL = "Bounce Dock icon" if sys.platform == "darwin" else "Flash taskbar"
+
+
 def flash_window(root: tk.Tk):
-    """Flash the taskbar button until the window is focused (Windows only)."""
+    """Flash the taskbar button (Windows) or bounce the Dock icon (macOS) until
+    the app is in front."""
+    if sys.platform == "darwin":
+        try:
+            # Tk ignores a repeat of the current value, so clear it first.
+            root.attributes("-notify", False)
+            root.attributes("-notify", True)
+        except tk.TclError:
+            pass  # cosmetic only
+        return
     if sys.platform != "win32":
         return
     try:
@@ -472,7 +484,8 @@ HELP_SECTIONS = [
      "    •  Each item alerts at most once an hour. An alert that comes back "
      "within the hour returns quietly, without flashing.\n"
      "    •  The FlipRec tab shows how many alerts are live, e.g. FlipRec (3), "
-     "whatever Show is set to. New ones flash the taskbar on Windows.\n"
+     "whatever Show is set to. New ones flash the taskbar on Windows or bounce "
+     "the Dock icon on macOS, if the checkbox beside the threshold is on.\n"
      "    •  If checks keep failing, alerts disappear once their prices "
      "are too old to trust: after 5 minutes, or two check periods if that "
      "is longer.\n"
@@ -497,9 +510,10 @@ HELP_SECTIONS = [
      "item reaches a price. Buy ≤ watches for the Buy price falling to your "
      "target, and Sell ≥ for the Sell price rising to it. Type 19,000, 19k "
      "or 1.5m.\n"
-     "    •  A met target gets a ✓ and a gold row, the tab shows how many "
-     "items have one, e.g. Watchlist (1), and on Windows the taskbar flashes "
-     "if the app isn't in front.\n"
+     "    •  A met target gets a ✓ and a gold row, and the tab shows how many "
+     "items have one, e.g. Watchlist (1). If the app isn't in front, the taskbar "
+     "flashes on Windows or the Dock icon bounces on macOS, if that checkbox on "
+     "FlipRec is on.\n"
      "    •  It's checked with every market check, only while the app is "
      "open, against the latest trade. One odd trade can meet a target, so check "
      "the price before acting.\n"
@@ -1946,8 +1960,12 @@ class OSRSTrackerApp:
         self._save_settings({"alert_threshold": self._alert_threshold()})
         # Re-check the last market snapshot right away with the new threshold.
         if self._evaluate_alerts()[0]:
-            flash_window(self.root)
+            self._flash_alert()
         self._render_fliprec_table()
+
+    def _flash_alert(self):
+        if self.alert_flash_var.get():
+            flash_window(self.root)
 
     def _alert_interval(self) -> int:
         """Seconds between market checks."""
@@ -2018,7 +2036,7 @@ class OSRSTrackerApp:
                     f"Prices updated {stamp} · {new} new · {expired} expired · "
                     f"{next_check}   {self._volume_note([3600])}".rstrip())
                 if new:
-                    flash_window(self.root)
+                    self._flash_alert()
             self._show_market_note()
             if self._refresh_again:
                 self._refresh_again = False
@@ -2286,7 +2304,7 @@ class OSRSTrackerApp:
                     fresh = fresh or now - last >= ALERT_COOLDOWN
         db.watchlist_mark_seen(seen, now)
         if fresh and not quiet:
-            flash_window(self.root)
+            self._flash_alert()
 
     def _on_watch_selected(self, _event=None):
         chosen = any(iid in self.watch_id_map
@@ -2314,8 +2332,9 @@ class OSRSTrackerApp:
         ttk.Label(body, text=name, style="Header.TLabel"
                   ).pack(anchor="w", pady=(0, 10))
         ttk.Label(body, wraplength=400, justify="left", text=(
-            "You get the tab count and taskbar flash when the latest trade "
-            "reaches a target. Leave a box blank for no target.")
+            "You get the tab count, and a taskbar flash or Dock bounce if "
+            "that's on, when the latest trade reaches a target. Leave a box "
+            "blank for no target.")
                   ).pack(anchor="w", pady=(0, 12))
 
         latest = (self._market or ({},))[0].get(str(item_id)) or {}
@@ -2507,7 +2526,7 @@ class OSRSTrackerApp:
             self._ignored = ignored
             # An item taken off the list can alert again straight away.
             if self._evaluate_alerts()[0]:
-                flash_window(self.root)
+                self._flash_alert()
             self._render_ignored()
             self._render_fliprec_table()
             self._redraw_volatile()
@@ -3120,7 +3139,14 @@ class OSRSTrackerApp:
         self.alert_threshold_var.trace_add(
             "write", lambda *_: self._schedule_threshold_change())
         ttk.Label(controls, text="gp", style="TLabel"
-                  ).pack(side="left", padx=(0, 16))
+                  ).pack(side="left", padx=(0, 10))
+        self.alert_flash_var = tk.BooleanVar(
+            value=prefs.get("alert_flash", True))
+        ttk.Checkbutton(controls, text=FLASH_LABEL,
+                        variable=self.alert_flash_var,
+                        command=lambda: self._save_settings(
+                            {"alert_flash": bool(self.alert_flash_var.get())})
+                        ).pack(side="left", padx=(0, 16))
 
         ttk.Label(controls, text="Show:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
@@ -3239,7 +3265,7 @@ class OSRSTrackerApp:
             return
         # Capital and Items also decide which flips alert.
         if self._evaluate_alerts()[0]:
-            flash_window(self.root)
+            self._flash_alert()
         self._update_tables()
         self._render_watchlist()
         self._notify_targets()

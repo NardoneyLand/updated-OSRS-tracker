@@ -258,7 +258,61 @@ def scenario():
         MARKET["latest"] = {"1": trade(2_300_000, 1_900_000), "3": trade(30_500_000, 28_000_000)}
         check_now()
         check(flashes and any(x[0] == "Bandos tassets" for x in rows()), "new item flashes")
+
+        # With the checkbox off an alert still shows and counts, but doesn't flash
+        def widgets(w):
+            return [w] + [d for c in w.winfo_children() for d in widgets(c)]
+        boxes = [w for w in widgets(app.fliprec_tab) if w.winfo_class() == "TCheckbutton"
+                 and w.cget("text") == gui.FLASH_LABEL]
+        check(len(boxes) == 1 and app.alert_flash_var.get() is True, "the checkbox is on FlipRec, on by default")
+        boxes[0].invoke()
+        check(settings.load()["alert_flash"] is False, "turning it off is saved")
+
+        def alert_again():
+            # Forget the alert, so the next evaluation finds it new again.
+            conn = db.get_connection()
+            conn.execute("DELETE FROM profit_alerts WHERE item_id = 3")
+            conn.commit(); conn.close()
+            flashes.clear()
+        alert_again()
+        check_now()
+        check(not flashes, "a market check doesn't flash with it off")
+        check(any(x[0] == "Bandos tassets" for x in rows()) and app.notebook.tab(app.fliprec_tab, "text") == "FlipRec (2)", "but the alert still shows and counts")
+        alert_again()
+        app._apply_flip_filters()
+        settle()
+        check(not flashes, "nor does changing a filter")
+        alert_again()
+        app._on_alert_threshold_changed()
+        check(not flashes, "nor does changing the threshold")
+        source = open(gui.__file__, encoding="utf-8").read()
+        check(source.count("flash_window(self.root)") == 1, "every flash goes through the checkbox")
+        boxes[0].invoke()
+        check(settings.load()["alert_flash"] is True, "turning it back on is saved")
         gui.flash_window = real_flash
+
+        # Each system gets its own signal, and a refusal from Tk is harmless
+        calls = []
+
+        class FakeRoot:
+            def attributes(self, *args):
+                calls.append(args)
+
+        class Refuses:
+            def attributes(self, *args):
+                raise tk.TclError("bad attribute")
+        real_platform = sys.platform
+        try:
+            sys.platform = "darwin"
+            gui.flash_window(FakeRoot())
+            check(calls == [("-notify", False), ("-notify", True)], f"macOS bounces the Dock icon: {calls}")
+            gui.flash_window(Refuses())
+            calls.clear()
+            sys.platform = "linux"
+            gui.flash_window(FakeRoot())
+            check(calls == [], "other systems do nothing")
+        finally:
+            sys.platform = real_platform
 
         # Threshold: raising hides, lowering brings back with no new alert
         before = {x[0] for x in rows()}
