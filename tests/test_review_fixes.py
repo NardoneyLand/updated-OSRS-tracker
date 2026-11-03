@@ -278,7 +278,6 @@ gui.volume.BACKFILL_PAUSE = 0
 scraper.scrape_all = lambda *a, **k: []
 # volume was reloaded above, and gui holds the module it imported first.
 gui.volume = volume
-k32 = ctypes.windll.kernel32
 root = tk.Tk()
 app = gui.OSRSTrackerApp(root)
 
@@ -296,6 +295,7 @@ def settle(cond=lambda: True, seconds=15):
 
 def handles():
     from ctypes import wintypes as W
+    k32 = ctypes.windll.kernel32
     k32.GetCurrentProcess.restype = W.HANDLE
     k32.GetProcessHandleCount.argtypes = [W.HANDLE, ctypes.POINTER(W.DWORD)]
     n = W.DWORD()
@@ -370,23 +370,24 @@ def scenario():
         for _ in range(5):
             gui.run_async(lambda: 1, lambda r, e: done.append(1))
         settle(lambda: len(done) >= 5)
-        before = handles()
-        for _ in range(100):
-            done.clear()
-            gui.run_async(lambda: 1, lambda r, e: done.append(1))
-            settle(lambda: done, 3)
-        time.sleep(0.3)
-        settle()
-        growth = handles() - before
-        check(growth <= 3, f"LEAK: 100 background jobs leave no handles behind (+{growth}; was +100)")
-        before = handles()
-        for _ in range(30):
-            app._refresh_market()
-            settle(lambda: not app._monitor_busy, 10)
-        time.sleep(0.3)
-        settle()
-        growth = handles() - before
-        check(growth <= 3, f"LEAK: 30 market checks leave no handles behind (+{growth})")
+        if sys.platform == "win32":   # handle counts are a Windows thing
+            before = handles()
+            for _ in range(100):
+                done.clear()
+                gui.run_async(lambda: 1, lambda r, e: done.append(1))
+                settle(lambda: done, 3)
+            time.sleep(0.3)
+            settle()
+            growth = handles() - before
+            check(growth <= 3, f"LEAK: 100 background jobs leave no handles behind (+{growth}; was +100)")
+            before = handles()
+            for _ in range(30):
+                app._refresh_market()
+                settle(lambda: not app._monitor_busy, 10)
+            time.sleep(0.3)
+            settle()
+            growth = handles() - before
+            check(growth <= 3, f"LEAK: 30 market checks leave no handles behind (+{growth})")
 
         # A failing callback doesn't stop the queue
         hit = []
