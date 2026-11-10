@@ -541,7 +541,10 @@ HELP_SECTIONS = [
      "    •  Ask AI doesn't suggest them. If one comes up, on your Watchlist or "
      "because you asked about it, the AI says it's ignored.\n"
      "    •  To bring items back, select them and click Remove from list, or "
-     "right-click them.\n\n"
+     "right-click them.\n"
+     "    •  Old school bonds never appear on FlipRec or Volatile and never "
+     "alert, without being on the list. Their latest buy and sell prices are "
+     "in the header, next to the app's name.\n\n"
      "Click a column header to sort (newest first to start); click again to "
      "reverse. Double-click a row to open the item in Search."),
 
@@ -1240,6 +1243,11 @@ class OSRSTrackerApp:
 
         ttk.Label(header, text="⚔  OSRS Price Tracker  ⚔",
                   style="Header.TLabel").pack(side="left")
+        # The bond's live price: it's kept off FlipRec and Volatile (see
+        # analyzer.HIDDEN_ITEM_IDS), so it shows here on every tab.
+        self.bond_var = tk.StringVar(value="")
+        ttk.Label(header, textvariable=self.bond_var,
+                  style="TLabel").pack(side="left", padx=(24, 0))
         self.status_var = tk.StringVar(value="Loading item mapping…")
         ttk.Label(header, textvariable=self.status_var,
                   style="Dim.TLabel").pack(side="right")
@@ -2011,6 +2019,18 @@ class OSRSTrackerApp:
         self.market_status.set(CAPITAL_ERROR if self._flip_capital() is None
                                else self._market_note)
 
+    def _show_bond_price(self):
+        """The header's bond price, from the last good market check. Buy and
+        sell are the same sides FlipRec uses: the latest instant-sell price
+        (`low`) and instant-buy price (`high`)."""
+        lt = self._market[0].get(str(analyzer.BOND_ID)) if self._market else None
+        if not lt or not (lt.get("low") or lt.get("high")):
+            self.bond_var.set("")
+            return
+        fmt = self._price_fmt()
+        self.bond_var.set(f"Bond  buy {fmt(lt.get('low'))} · "
+                          f"sell {fmt(lt.get('high'))}")
+
     def _refresh_market(self):
         """Fetch the market once and bring every tab up to those prices."""
         # Any check (timer, button or new rate) restarts the countdown.
@@ -2055,6 +2075,7 @@ class OSRSTrackerApp:
                 self._render_watchlist()
                 self._notify_targets()
                 self._refresh_search_facts()
+                self._show_bond_price()
                 stamp = time.strftime("%H:%M:%S",
                                       time.localtime(self._market[2]))
                 self._market_note = (
@@ -2907,6 +2928,7 @@ class OSRSTrackerApp:
         self._render_fliprec_table()
         self._render_watchlist()
         self._render_volatile_table()
+        self._show_bond_price()
 
     def _on_search_format_changed(self):
         self._save_settings({"search_price_format": self.search_format_var.get()})

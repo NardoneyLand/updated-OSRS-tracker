@@ -6,6 +6,12 @@ import statistics
 from typing import Callable, List, Optional, Tuple
 
 
+# Old school bond: you buy it for membership, not to flip it. It's left out of
+# FlipRec, Volatile and the alerts, as if it were on the Ignored List, and its
+# price is shown in the window's header instead.
+BOND_ID = 13190
+HIDDEN_ITEM_IDS = frozenset({BOND_ID})
+
 # ── Trend ─────────────────────────────────────────────────────────────────────
 
 def calculate_trend(history: List[Tuple]) -> dict:
@@ -181,7 +187,8 @@ def find_volatile_items(
     Compares the current /latest mid-price to the windowed average mid-price
     from a bulk endpoint (/5m, /1h, /6h, /24h). Filters items whose total
     volume in the window is below `min_volume` to suppress noise from
-    illiquid items where a single trade can swing the price.
+    illiquid items where a single trade can swing the price. HIDDEN_ITEM_IDS
+    are left out.
 
     Returns a list of dicts (sorted by abs(pct_change) desc):
         {item_id, name, current, avg, pct_change, volume}
@@ -193,6 +200,8 @@ def find_volatile_items(
         try:
             item_id = int(item_id_str)
         except (TypeError, ValueError):
+            continue
+        if item_id in HIDDEN_ITEM_IDS:
             continue
 
         avg_data = bulk_avg.get(item_id_str)
@@ -510,13 +519,15 @@ def find_flips(
 ) -> list:
     """
     All items with a positive after-tax margin that you can afford at least
-    one of, as flip_row() dicts, best first. Items whose buy or sell side
+    one of, as flip_row() dicts, best first, leaving out HIDDEN_ITEM_IDS. Items whose buy or sell side
     has not traded within FLIP_MAX_AGE are kept but flagged active=False /
     verdict 'Inactive' (their margin is likely phantom).
     """
     bulk_5m = bulk_5m or {}
     results = []
     for item in mapping:
+        if item.get("id") in HIDDEN_ITEM_IDS:
+            continue
         if membership == "members" and not item.get("members"):
             continue
         if membership == "f2p" and item.get("members"):

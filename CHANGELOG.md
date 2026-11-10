@@ -3,6 +3,13 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.7 — 2026-11-10
+
+**Changed**
+- Old school bonds no longer appear on FlipRec or Volatile, and they never alert. You
+  don't have to add them to the Ignored List. Their latest buy and sell prices now show
+  in the header, next to the app's name, on every tab.
+
 ## 1.6.6 — 2026-11-03
 
 **Added**
