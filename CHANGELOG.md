@@ -3,6 +3,17 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.8 — 2026-11-12
+
+**Added**
+- Beside the Search chart are facts about the range you chose: the highest, lowest and
+  average Buy and Sell prices, units traded on each side, how far today's prices are
+  above the range's low, the change over the range, the typical margin after tax, buy
+  pressure (the share of trades that were instant buys), the pace per hour or per day,
+  and the gp traded. Zoom in and they cover only what's in view. Help explains each one.
+- Ask AI can look up the same numbers for any item and range, so you can ask things
+  like "how much whip traded last week?" or "is it near its monthly low?".
+
 ## 1.6.7 — 2026-11-10
 
 **Changed**

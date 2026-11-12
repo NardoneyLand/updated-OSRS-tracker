@@ -95,6 +95,9 @@ are left out of the flips, movers and alerts your tools return. They can still \
 appear on the user's Watchlist or when asked about by name, with on_ignored_list \
 set to true. Whenever you mention such an item, say that it's on their Ignored \
 List, and don't suggest flipping it.
+- get_price_range gives one item's prices and trading over 1H to a year: how many \
+traded, the range's highs and lows, and where the live price sits in that range. \
+Use it for questions about a period, such as last week's volume.
 - get_alert_history shows how often items have alerted over the last 7 days. An \
 item that keeps alerting and isn't on the user's Watchlist is worth suggesting \
 they add, with the numbers behind it. Alerts are flips that passed the user's \

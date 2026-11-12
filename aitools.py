@@ -29,6 +29,8 @@ VERDICTS = ("Profitable", "Marginal", "Unsteady", "Suspect", "Inactive")
 ITEM_MATCH_MIN_SCORE = 0.35   # "whip" should still find "Abyssal whip"
 SETTING_MEMBERSHIP = {"Members only": "members", "F2P only": "f2p"}
 SORT_KEYS = ("profit", "roi", "net", "volume")
+RANGES = [label for label, _window, _step in analyzer.CHART_RANGES]
+DEFAULT_RANGE = "1W"
 
 TOOLS = [
     {
@@ -81,6 +83,30 @@ TOOLS = [
             "type": "object",
             "properties": {"name": {"type": "string",
                                     "description": "Item name."}},
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "get_price_range",
+        "description": (
+            "One item's prices and trading over a time range, the same numbers "
+            "shown beside the Search chart: the highest, lowest and average buy "
+            "and sell prices, units traded each side and in total, the pace per "
+            "hour or day, gp traded, buy pressure (the % of units that were "
+            "instant buys), the change over the range, the typical margin after "
+            "tax, and how far the live prices are above the range's lows and "
+            "below its highs. Use it for questions such as how much of an item "
+            "traded last week or whether it's near its monthly low. These "
+            "describe the past and aren't a forecast. Accepts an approximate "
+            "name."),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Item name."},
+                "range": {"type": "string", "enum": RANGES,
+                          "description": "1H, 12H, 1D, 1W (default), 1M, 1Y, "
+                                         "or All (about a year)."},
+            },
             "required": ["name"],
         },
     },
@@ -142,6 +168,7 @@ TOOLS = [
 STATUS_TEXT = {
     "get_flips": "Checking flips…",
     "get_item": "Looking up an item…",
+    "get_price_range": "Reading an item's price history…",
     "get_movers": "Checking price moves…",
     "get_my_tracker": "Reading your watchlist and alerts…",
     "get_alert_history": "Checking your alert history…",
@@ -258,6 +285,9 @@ def _log_lookup(name: str, args, result: dict) -> None:
     elif name == "get_item":
         summary = result["name"]
         rows = [result["flip"]] if result["flip"] else []
+    elif name == "get_price_range":
+        summary = (f"{result['name']} {result['range']}: "
+                   f"{result['data_points']} points")
     elif name == "get_movers":
         summary = f"{len(result['movers'])} movers over {result['window']}"
         rows = result["movers"]
@@ -317,6 +347,7 @@ class MarketTools:
         handler = {
             "get_flips": self._get_flips,
             "get_item": self._get_item,
+            "get_price_range": self._get_price_range,
             "get_movers": self._get_movers,
             "get_my_tracker": self._get_my_tracker,
             "get_alert_history": self._get_alert_history,
@@ -431,7 +462,8 @@ class MarketTools:
             "flips": [_flip_summary(r) for r in rows[:limit]],
         }
 
-    def _get_item(self, args: dict) -> dict:
+    def _find_item(self, args: dict) -> list:
+        """(score, item) matches for args['name'], best first."""
         name = args.get("name")
         if not isinstance(name, str) or not name.strip():
             raise ToolError("name is required.")
@@ -439,6 +471,10 @@ class MarketTools:
             name, self._mapping(), min_score=ITEM_MATCH_MIN_SCORE, top_n=5)
         if not matches:
             raise ToolError(f"No item found matching {name!r}.")
+        return matches
+
+    def _get_item(self, args: dict) -> dict:
+        matches = self._find_item(args)
         item = matches[0][1]
         item_id = item["id"]
 
@@ -482,6 +518,67 @@ class MarketTools:
             },
             "other_close_matches": [m[1]["name"] for m in matches[1:]],
         }
+
+    def _get_price_range(self, args: dict) -> dict:
+        matches = self._find_item(args)
+        item = matches[0][1]
+        label = _choice(args, "range", RANGES, DEFAULT_RANGE)
+        _label, window, step = next(
+            r for r in analyzer.CHART_RANGES if r[0] == label)
+        size = api.STEP_SECONDS[step]
+        since = int(time.time()) - window if window else 0
+        rows = analyzer.timeseries_rows(
+            api.get_timeseries(item["id"], timestep=step), since)
+        stats = analyzer.range_stats(
+            rows, size, exempt=item["name"] in analyzer.GE_TAX_EXEMPT_NAMES)
+        result = {"name": item["name"], "range": label, "data_points": len(rows),
+                  "other_close_matches": [m[1]["name"] for m in matches[1:]]}
+        if not stats:
+            result["note"] = ("No price history came back for this range. The "
+                              "item may not have traded, or the lookup failed.")
+            return result
+
+        def rounded(value, places=1):
+            return None if value is None else round(value, places)
+
+        def clock(ts):
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+        per_hour = stats["per_hour"]
+        result.update({
+            "minutes_per_point": size // 60,
+            "from": clock(rows[0][2]), "to": clock(rows[-1][2] + size),
+            "buy_price": {"highest": stats["buy_high"], "lowest": stats["buy_low"],
+                          "average": stats["buy_avg"]},
+            "sell_price": {"highest": stats["sell_high"],
+                           "lowest": stats["sell_low"],
+                           "average": stats["sell_avg"]},
+            "units_traded": None if per_hour is None else {
+                "instant_buys": stats["instant_buys"],
+                "instant_sells": stats["instant_sells"],
+                "total": stats["instant_buys"] + stats["instant_sells"],
+                "per_hour": round(per_hour), "per_day": round(per_hour * 24)},
+            "gp_traded": stats["gp_traded"],
+            "buy_pressure_pct": rounded(stats["buy_pressure"]),
+            "change_pct": rounded(stats["change_pct"], 2),
+            "typical_margin_after_tax": stats["margin"],
+            "margin_positive_pct": stats["margin_positive"],
+            "note": (f"Each point is a {size // 60}-minute average, so single "
+                     "trades may have gone past the highest and lowest. "
+                     "units_traded null means the Wiki sent no volumes."),
+        })
+        try:
+            latest, _bulk, fetched_at, _bulk_5m = self._latest_market()
+        except ToolError:
+            return result     # the range still answers the question
+        lt = latest.get(str(item["id"])) or {}
+        high = lt.get("high")
+        low = lt.get("low") or high
+        where = analyzer.range_position(stats, high, low)
+        result["live"] = {"buy": low, "sell": high,
+                          "prices_checked_at": _clock(fetched_at),
+                          **{k: rounded(v) for k, v in where.items()}}
+        return result
 
     def _get_movers(self, args: dict) -> dict:
         window = _choice(args, "window", MOVER_WINDOWS, "1h")

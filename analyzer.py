@@ -381,6 +381,123 @@ def margin_history(prices: Optional[List[Tuple[int, int]]], exempt: bool = False
             statistics.median_low(margins), len(margins))
 
 
+RANGE_MIN_MARGIN_PERIODS = 3  # fewer points with both sides priced: no margin
+# The Search chart's ranges, which Ask AI can ask about too: (label, window in
+# seconds or None for all time, API timestep used for that window). Coarser
+# steps reach further back: 5m ≈ 1 day, 1h ≈ 15 days, 6h ≈ 90 days, 24h ≈ 1 year.
+CHART_RANGES = [
+    ("1H",   3600,        "5m"),
+    ("12H",  12 * 3600,   "5m"),
+    ("1D",   86400,       "5m"),
+    ("1W",   7 * 86400,   "1h"),
+    ("1M",   30 * 86400,  "6h"),
+    ("1Y",   365 * 86400, "24h"),
+    ("All",  None,        "24h"),
+]
+
+
+def timeseries_rows(points, since: int = 0) -> list:
+    """API timeseries points as range_stats() rows, at or after `since`. A side
+    with no price takes the other side's, as the app stores them."""
+    rows = []
+    for p in points or []:
+        ts, high, low = p.get("timestamp"), p.get("avgHighPrice"), p.get("avgLowPrice")
+        if ts is None or ts < since or (high is None and low is None):
+            continue
+        rows.append((high or low, low or high, ts,
+                     p.get("highPriceVolume"), p.get("lowPriceVolume")))
+    return rows
+
+
+def range_stats(rows, step_seconds: int, exempt: bool = False) -> Optional[dict]:
+    """
+    Facts about the chart's points in view. rows are (high, low, timestamp,
+    high volume, low volume) oldest first, as db.get_price_range() returns.
+
+    Each point is an average over its period, so the highest and lowest are
+    of those averages, not single trades. A side with 0 units traded had no
+    price of its own (the other side's was stored in its place), so it's left
+    out of that side's prices. Volumes are None where unknown. Averages are
+    weighted by units traded where those are known.
+
+    Keys: sell_high/sell_low/sell_avg and buy_high/buy_low/buy_avg (None if
+    that side has no prices), change_pct, first_mid, last_mid, margin (median
+    per period, after tax), margin_positive (% of periods), margin_periods,
+    instant_buys, instant_sells, gp_traded and per_hour (None if no volumes
+    are known), and buy_pressure: the % of units traded that were instant
+    buys (None if none traded). None if there are no rows.
+    """
+    rows = [r for r in rows or [] if r[0] or r[1]]
+    if not rows:
+        return None
+
+    def side(price_at, volume_at):
+        priced = [(r[price_at], r[volume_at]) for r in rows
+                  if r[price_at] and r[volume_at] != 0]
+        if not priced:
+            return None, None, None
+        prices = [p for p, _v in priced]
+        units = sum(v for _p, v in priced if v)
+        avg = (sum(p * v for p, v in priced if v) / units if units
+               else sum(prices) / len(prices))
+        return max(prices), min(prices), round(avg)
+
+    def mid(r):
+        return (r[0] + r[1]) / 2 if (r[0] and r[1]) else (r[0] or r[1])
+
+    sell_high, sell_low, sell_avg = side(0, 3)
+    buy_high, buy_low, buy_avg = side(1, 4)
+    first_mid, last_mid = mid(rows[0]), mid(rows[-1])
+
+    margins = [h - ge_tax(h, exempt) - l for h, l, _ts, hv, lv in rows
+               if h and l and hv != 0 and lv != 0]
+    if len(margins) < RANGE_MIN_MARGIN_PERIODS:
+        margins = []
+
+    traded = [r for r in rows if r[3] is not None or r[4] is not None]
+    if traded:
+        instant_buys = sum(r[3] or 0 for r in traded)
+        instant_sells = sum(r[4] or 0 for r in traded)
+        gp_traded = sum((r[0] or 0) * (r[3] or 0) + (r[1] or 0) * (r[4] or 0)
+                        for r in traded)
+        hours = (traded[-1][2] - traded[0][2] + step_seconds) / 3600
+        per_hour = (instant_buys + instant_sells) / hours
+    else:
+        instant_buys = instant_sells = gp_traded = per_hour = None
+    units = (instant_buys or 0) + (instant_sells or 0)
+
+    return {
+        "sell_high": sell_high, "sell_low": sell_low, "sell_avg": sell_avg,
+        "buy_high": buy_high, "buy_low": buy_low, "buy_avg": buy_avg,
+        "first_mid": round(first_mid), "last_mid": round(last_mid),
+        "change_pct": (last_mid - first_mid) / first_mid * 100,
+        "margin": statistics.median_low(margins) if margins else None,
+        "margin_positive": (sum(m > 0 for m in margins) * 100 // len(margins)
+                            if margins else None),
+        "margin_periods": len(margins),
+        "instant_buys": instant_buys, "instant_sells": instant_sells,
+        "gp_traded": gp_traded, "per_hour": per_hour,
+        "buy_pressure": instant_buys * 100 / units if units else None,
+    }
+
+
+def range_position(stats: Optional[dict], live_high, live_low) -> dict:
+    """Where the live prices sit against a range_stats() range: the % each side
+    is above that side's lowest and below its highest. None where unknown.
+    The range is of averages and the live price is one trade, so it can fall
+    outside it: then above_low or below_high is negative."""
+    def pct(a, b):
+        return (a - b) / b * 100 if a and b else None
+
+    stats = stats or {}
+    return {
+        "buy_above_low_pct": pct(live_low, stats.get("buy_low")),
+        "buy_below_high_pct": pct(stats.get("buy_high"), live_low),
+        "sell_above_low_pct": pct(live_high, stats.get("sell_low")),
+        "sell_below_high_pct": pct(stats.get("sell_high"), live_high),
+    }
+
+
 def why_no_alert(row: dict) -> Optional[str]:
     """What keeps a flip from alerting: 'inactive', 'suspect' or 'side_idle'.
     None if it's recent and believable enough to alert on or for Ask AI to offer.

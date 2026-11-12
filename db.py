@@ -87,6 +87,11 @@ def initialize_db():
     cols = [r[1] for r in c.execute("PRAGMA table_info(price_history)")]
     if "source_step" not in cols:
         c.execute("ALTER TABLE price_history ADD COLUMN source_step TEXT")
+    # Migration: units traded at each price in the period, for the chart's
+    # range stats. Older rows are filled in by their next backfill.
+    for col in ("high_volume", "low_volume"):
+        if col not in cols:
+            c.execute(f"ALTER TABLE price_history ADD COLUMN {col} INTEGER")
 
     # Migration: alerts now track live prices and expire (see
     # sync_profit_alerts). updated = when the prices were last confirmed.
@@ -149,9 +154,10 @@ def record_price(item_id: int, item_name: str, high: int, low: int):
 def backfill_price_history(item_id: int, item_name: str, points: list,
                            step: str) -> int:
     """
-    Insert historical API timeseries points (avgHighPrice/avgLowPrice/timestamp)
-    for the given timestep ('5m' | '1h' | '6h' | '24h') that we don't already
-    have. Returns the number of rows added.
+    Insert historical API timeseries points (avgHighPrice/avgLowPrice/timestamp
+    and the units traded each side) for the given timestep ('5m' | '1h' | '6h'
+    | '24h') that we don't already have, and fill in the units traded on points
+    saved before those were kept. Returns the number of rows added or changed.
     """
     rows = []
     for pt in points:
@@ -159,7 +165,8 @@ def backfill_price_history(item_id: int, item_name: str, points: list,
         high, low = pt.get("avgHighPrice"), pt.get("avgLowPrice")
         if ts is None or (high is None and low is None):
             continue
-        rows.append((item_id, item_name, high or low, low or high, int(ts), step))
+        rows.append((item_id, item_name, high or low, low or high, int(ts), step,
+                     pt.get("highPriceVolume"), pt.get("lowPriceVolume")))
     if not rows:
         return 0
 
@@ -176,12 +183,22 @@ def backfill_price_history(item_id: int, item_name: str, points: list,
     before = conn.total_changes
     conn.executemany(
         "INSERT OR IGNORE INTO price_history "
-        "(item_id, item_name, high_price, low_price, timestamp, source_step) "
-        "VALUES (?, ?, ?, ?, ?, ?)", new_rows)
-    added = conn.total_changes - before
+        "(item_id, item_name, high_price, low_price, timestamp, source_step, "
+        " high_volume, low_volume) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", new_rows)
+    # Only rows whose numbers differ count as changed, so a repeat backfill
+    # reports 0 and doesn't redraw the chart for nothing.
+    conn.executemany(
+        "UPDATE price_history SET high_volume = ?, low_volume = ? "
+        "WHERE item_id = ? AND timestamp = ? "
+        "AND (source_step = ? OR (? = '1h' AND source_step IS NULL)) "
+        "AND (high_volume IS NOT ? OR low_volume IS NOT ?)",
+        [(r[6], r[7], item_id, r[4], step, step, r[6], r[7])
+         for r in rows if r[4] in existing])
+    changed = conn.total_changes - before
     conn.commit()
     conn.close()
-    return added
+    return changed
 
 
 def get_price_history(item_id: int, limit: int = 50) -> List[Tuple]:
@@ -201,12 +218,14 @@ def get_price_history(item_id: int, limit: int = 50) -> List[Tuple]:
 def get_price_range(item_id: int, since_ts: int, step: str,
                     include_live: bool) -> List[Tuple]:
     """
-    Return rows (high, low, timestamp) oldest-first, at or after since_ts, for
-    one API timestep (plus live/legacy snapshots if include_live).
+    Return rows (high, low, timestamp, high volume, low volume) oldest-first,
+    at or after since_ts, for one API timestep (plus live/legacy snapshots if
+    include_live). The volumes are the units traded at each price in that
+    period, None where unknown (live snapshots, older rows not refilled yet).
     """
     conn = get_connection()
     rows = conn.execute(
-        "SELECT high_price, low_price, timestamp "
+        "SELECT high_price, low_price, timestamp, high_volume, low_volume "
         "FROM price_history WHERE item_id = ? AND timestamp >= ? "
         "AND (source_step = ? OR (? AND source_step IS NULL)) "
         "ORDER BY timestamp ASC",

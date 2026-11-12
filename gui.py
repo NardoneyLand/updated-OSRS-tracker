@@ -50,19 +50,16 @@ ALERT_DEFAULT_THRESHOLD = 1_000_000     # est. profit, adjustable in 100K steps
 ALERT_THRESHOLD_STEPS = [f"{v:,}" for v in range(100_000, 100_000_001, 100_000)]
 TIMESERIES_STEP = "1h"
 
-# History tab time ranges: (label, window in seconds or None for all time,
-# API timestep used for that window). Coarser steps reach further back:
-# 5m ≈ 1 day, 1h ≈ 15 days, 6h ≈ 90 days, 24h ≈ 1 year.
-HISTORY_RANGES = [
-    ("1H",   3600,        "5m"),
-    ("12H",  12 * 3600,   "5m"),
-    ("1D",   86400,       "5m"),
-    ("1W",   7 * 86400,   "1h"),
-    ("1M",   30 * 86400,  "6h"),
-    ("1Y",   365 * 86400, "24h"),
-    ("All",  None,        "24h"),
-]
+# The chart's time ranges: (label, window in seconds or None for all time,
+# API timestep used for that window).
+HISTORY_RANGES = analyzer.CHART_RANGES
+RANGE_STATS_PAD = 4          # px above and below the stats beside the chart
+RANGE_STATS_GAP = 4          # px between their table and facts when stacked
 HISTORY_DEFAULT_RANGE = "1W"
+# What the range stats above the chart cover, unless it's zoomed.
+RANGE_TITLES = {"1H": "Last hour", "12H": "Last 12 hours", "1D": "Last day",
+                "1W": "Last week", "1M": "Last month", "1Y": "Last year",
+                "All": "All time"}
 PRICE_FORMATS = ["Short (1.2K)", "Exact (1,240)"]
 STEP_SECONDS = api.STEP_SECONDS
 UI_QUEUE_POLL_MS = 50             # how often the window picks up finished work
@@ -603,6 +600,29 @@ HELP_SECTIONS = [
      "you search an item. Short ranges use 5-minute data, 1W hourly, 1M "
      "6-hourly, and 1Y / All daily; All goes back about a year. Refresh "
      "chart re-downloads it.\n\n"
+     "Beside the chart are facts about the range you chose:\n"
+     "    •  Highest, Lowest and Average — of the Buy and Sell prices. Each "
+     "chart point is an average over its period (5 minutes on 1H to 1D, up to "
+     "a day on 1Y and All), so a single trade may have gone further. Average "
+     "is weighted by the units traded.\n"
+     "    •  Traded — units traded on each side: instant sells happen at the "
+     "Buy price, and instant buys at the Sell price.\n"
+     "    •  Now vs low — how far today's Buy and Sell prices are above the "
+     "range's lowest. +15% on Buy means the Buy price is 15% above the low; "
+     "near 0% means it's close to the bottom of the range. It can go below 0, "
+     "since the live price is a single trade and the low is an average. It "
+     "follows every market check.\n"
+     "    •  Change — from the first point's mid price to the last one's.\n"
+     "    •  Typical margin — the median of each point's Sell price minus "
+     "tax minus its Buy price, and how often that was above 0.\n"
+     "    •  Buy pressure — the share of units traded that were instant buys. "
+     "Above 50% means buyers paid the Sell price more often than sellers "
+     "took the Buy price. It describes the range; it isn't a forecast.\n"
+     "    •  Per hour (1H, 12H, 1D) or Per day — both sides together, at the "
+     "average pace over the range. GP traded is the coins that changed "
+     "hands.\n"
+     "When you zoom in, they cover only what's in view, and the heading "
+     "says In view.\n\n"
      "Zoom in: scroll the mouse wheel over the chart (it zooms around the "
      "pointer), then drag left or right to move along. The price axis "
      "rescales to what's in view. Double-click the chart or press Reset "
@@ -1477,6 +1497,10 @@ class OSRSTrackerApp:
         self.history_canvas = tk.Canvas(
             chart_frame, bg=COLOR_PANEL, highlightthickness=0, height=240)
         self.history_canvas.pack(fill="both", expand=True, padx=10, pady=10)
+        # Facts about the range on the chart, beside it so they take no height
+        # from it. Shown from the first search on (see _show_range_stats).
+        self._range_stats = self._build_range_stats(chart_frame)
+        self._range_stats_shown = None    # range_stats() for what's in view
         # Every resize redraws, including the first time the canvas is shown,
         # so the placeholder is centred at the real size.
         self.history_canvas.bind("<Configure>",
@@ -1703,6 +1727,7 @@ class OSRSTrackerApp:
                               price_data.get("highTime"),
                               price_data.get("lowTime"))
         self._show_search_trade()
+        self._show_range_now()
 
     def _show_search_facts(self):
         """Fill in what comes from the item's own history. Widgets are reused,
@@ -3582,10 +3607,135 @@ class OSRSTrackerApp:
         w, h = c.winfo_width(), c.winfo_height()
         return None if w <= 1 or h <= 1 else (w, h)
 
+    def _build_range_stats(self, parent) -> dict:
+        """The range stats beside the chart: a table of each side's prices and
+        units traded, and facts about both. The facts go under the table when
+        the chart is tall enough, else beside it, so nothing is cut off.
+        Built once; its widgets are reused, because Tk never frees a widget's
+        name."""
+        panel = ttk.Frame(parent, style="Inner.TFrame")
+        table = ttk.Frame(panel, style="Inner.TFrame")
+        facts = ttk.Frame(panel, style="Inner.TFrame")
+        table.grid(row=0, column=0, sticky="nw")
+        # The chart's own small font, so it all fits beside the chart.
+        bold = (SANS, FONT_SMALL[1], "bold")
+        cells = {"panel": panel}
+
+        def text(frame, row, col=0, **kw):
+            widget = tk.Label(frame, bd=0, pady=0, bg=COLOR_PANEL, **kw)
+            widget.grid(row=row, column=col, sticky="w" if col == 0 else "e",
+                        padx=(0, 12) if col == 0 else (14, 0))
+            return widget
+
+        cells["title"] = text(table, 0, fg=COLOR_ACCENT,
+                              font=(SERIF, FONT_BODY[1], "bold"))
+        for col, (head, color) in enumerate((("Buy", COLOR_RED),
+                                             ("Sell", COLOR_GREEN)), start=1):
+            text(table, 0, col, text=head, fg=color, font=bold)
+        # Instant sells trade at the Buy price, instant buys at the Sell price.
+        for row, (label, key) in enumerate((("Highest", "high"),
+                                            ("Lowest", "low"),
+                                            ("Average", "avg"),
+                                            ("Traded", "traded"),
+                                            ("Now vs low", "now")), start=1):
+            text(table, row, text=label, fg=COLOR_DIM, font=FONT_SMALL)
+            for col, side in enumerate(("buy", "sell"), start=1):
+                cells[side, key] = text(table, row, col, fg=COLOR_TEXT, font=bold)
+        for row, key in enumerate(("Change", "Typical margin", "Buy pressure",
+                                   "Pace", "GP traded")):
+            label = text(facts, row, fg=COLOR_DIM, font=FONT_SMALL, text=key)
+            if key == "Pace":     # its label says per hour or per day
+                cells["pace label"] = label
+            cells[key] = text(facts, row, 1, fg=COLOR_TEXT, font=bold)
+
+        def place(_event=None):
+            room = parent.winfo_height() - 2 * RANGE_STATS_PAD
+            stacked = (table.winfo_reqheight() + RANGE_STATS_GAP
+                       + facts.winfo_reqheight())
+            if stacked <= room:
+                facts.grid(row=1, column=0, sticky="ne", padx=0,
+                           pady=(RANGE_STATS_GAP, 0))
+            else:
+                facts.grid(row=0, column=1, sticky="nw", padx=(24, 0), pady=0)
+        # Decided by the chart's height only, so moving the facts (which
+        # changes the chart's width) can't flip it back and forth.
+        parent.bind("<Configure>", place, add="+")
+        table.bind("<Configure>", place, add="+")
+        facts.bind("<Configure>", place, add="+")
+        place()
+        return cells
+
+    def _show_range_stats(self, rows):
+        """Fill the range stats from the chart's points in view, or dashes
+        while there are none. Hidden until something has been searched."""
+        cells = self._range_stats
+        if not self.history_item:
+            return
+        if not cells["panel"].winfo_manager():
+            cells["panel"].pack(side="right", anchor="n", padx=(0, 16),
+                                pady=RANGE_STATS_PAD, before=self.history_canvas)
+        _label, _window, step = next(
+            r for r in HISTORY_RANGES if r[0] == self.history_range)
+        hourly = step == "5m"      # the short ranges
+        cells["title"].config(text="In view" if self._chart_view
+                              else RANGE_TITLES[self.history_range])
+        cells["pace label"].config(text="Per hour" if hourly else "Per day")
+        stats = analyzer.range_stats(
+            rows, STEP_SECONDS.get(step, 3600),
+            exempt=self.history_item[1] in analyzer.GE_TAX_EXEMPT_NAMES) or {}
+        fmt = self._search_price_fmt()
+
+        def show(key, value, text=None):
+            cells[key].config(text="-" if value is None else text or fmt(value))
+
+        for side, traded in (("buy", "instant_sells"), ("sell", "instant_buys")):
+            for key in ("high", "low", "avg"):
+                show((side, key), stats.get(f"{side}_{key}"))
+            show((side, "traded"), stats.get(traded))
+
+        pct = stats.get("change_pct")
+        if pct is not None:
+            move = "Up" if pct >= 0.05 else "Down" if pct <= -0.05 else "Flat"
+            gap = stats["last_mid"] - stats["first_mid"]
+            sign = "+" if gap > 0 else "-" if gap < 0 else ""
+            pct = f"{move} {abs(pct):.1f}%  ({sign}{fmt(abs(gap))})"
+        show("Change", pct, pct)
+        margin = stats.get("margin")
+        show("Typical margin", margin, margin is not None and
+             f"{fmt(margin)}  ({stats['margin_positive']}% positive)")
+        per_hour = stats.get("per_hour")
+        show("Pace", per_hour, per_hour is not None and
+             f"{fmt(round(per_hour if hourly else per_hour * 24))} traded")
+        value = stats.get("gp_traded")
+        # fmt_gp stops at M, which makes billions hard to read.
+        show("GP traded", value, value is not None and fmt is fmt_gp
+             and value >= 1_000_000_000 and f"{value / 1_000_000_000:.2f}B")
+        pressure = stats.get("buy_pressure")
+        show("Buy pressure", pressure, pressure is not None and
+             f"{pressure:.0f}% instant buys")
+        self._range_stats_shown = stats
+        self._show_range_now()
+
+    def _show_range_now(self):
+        """How far the live prices are above the range's lowest. Also runs on
+        every market check, which doesn't redraw the chart."""
+        cells = self._range_stats
+        shown = self._search_shown
+        live = (None, None)
+        if (shown and self.history_item
+                and shown["item"]["id"] == self.history_item[0]):
+            high = shown["price_data"].get("high")
+            live = (high, shown["price_data"].get("low") or high)
+        where = analyzer.range_position(self._range_stats_shown, *live)
+        for side in ("buy", "sell"):
+            pct = where[f"{side}_above_low_pct"]
+            cells[side, "now"].config(text="-" if pct is None else f"{pct:+.1f}%")
+
     def _history_placeholder(self, text: str):
         # Nothing to zoom while a message is shown.
         self._chart_rows = None
         self._chart_geom = None
+        self._show_range_stats(None)
         size = self._chart_size()
         if not size:
             return
@@ -3673,14 +3823,7 @@ class OSRSTrackerApp:
         range_label, _window, step = next(
             r for r in HISTORY_RANGES if r[0] == self.history_range)
 
-        # Check the size before clearing, so a squeezed canvas keeps its
-        # last drawing instead of going blank.
-        size = self._chart_size()
-        if not size or size[0] < 50 or size[1] < 50:
-            return
-        W, H = size
-
-        times = [ts for _h, _l, ts in history]
+        times = [r[2] for r in history]
         full_min, full_max = times[0], times[-1]
         t_min, t_max = self._chart_view or (full_min, full_max)
 
@@ -3690,13 +3833,21 @@ class OSRSTrackerApp:
         last = bisect.bisect_right(times, t_max)
         visible = history[first:last]
         drawn = history[max(0, first - 1):last + 1]
+        self._show_range_stats(visible)
+
+        # Check the size before clearing, so a squeezed canvas keeps its
+        # last drawing instead of going blank.
+        size = self._chart_size()
+        if not size or size[0] < 50 or size[1] < 50:
+            return
+        W, H = size
 
         def mid(h, l):
             return (h + l) / 2 if (h and l) else (h or l or 0)
 
         # Fit the price axis to what's in view, so zooming in on a flat
         # stretch shows its detail.
-        all_vals = [v for h, l, _ts in (visible or drawn)
+        all_vals = [v for h, l, *_rest in (visible or drawn)
                     for v in (h, l, mid(h, l)) if v]
         if not all_vals:
             self._history_placeholder("No usable price values.")
@@ -3748,7 +3899,7 @@ class OSRSTrackerApp:
         # Plot lines
         def plot_series(values, color, marker=False):
             pts = []
-            for (_h, _l, ts), v in zip(drawn, values):
+            for (_h, _l, ts, *_vol), v in zip(drawn, values):
                 if not v:
                     continue
                 x, y = x_pos(ts), y_pos(v)
@@ -3760,9 +3911,9 @@ class OSRSTrackerApp:
             if len(pts) >= 4:
                 c.create_line(pts, fill=color, width=2, smooth=False)
 
-        plot_series([h for h, _l, _ts in drawn], COLOR_GREEN, marker=True)
-        plot_series([l for _h, l, _ts in drawn], COLOR_RED, marker=True)
-        plot_series([mid(h, l) for h, l, _ts in drawn], COLOR_BLUE)
+        plot_series([r[0] for r in drawn], COLOR_GREEN, marker=True)
+        plot_series([r[1] for r in drawn], COLOR_RED, marker=True)
+        plot_series([mid(r[0], r[1]) for r in drawn], COLOR_BLUE)
 
         # Cover anything drawn outside the plot area (the lines out to the
         # off-screen neighbours, or above/below the fitted price range).
