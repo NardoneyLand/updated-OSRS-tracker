@@ -156,7 +156,7 @@ def scenario():
             headers = headers or names
             check(names == headers, f"{name} uses the same headers: {names}")
         check("net" not in app.watch_tree["columns"], "Net / item is only on FlipRec")
-        check({"net", "tax", "limit", "verdict", "signal"} <= set(app.flip_tree["columns"]), "FlipRec keeps its own columns")
+        check({"net", "tax", "limit", "signal"} <= set(app.flip_tree["columns"]) and "verdict" not in app.flip_tree["columns"], "FlipRec keeps its own columns, without Verdict")
         check({"target_below", "target_above", "vol_12h", "vol_24h", "verdict", "added"} <= set(app.watch_tree["columns"]), "Watchlist keeps its own columns")
         check({"pct", "avg", "window_volume"} <= set(app.volatile_tree["columns"]), "Volatile has its own columns")
         check("current" not in app.volatile_tree["columns"], "Buy and Sell replace Current")

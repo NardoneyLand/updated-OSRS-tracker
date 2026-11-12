@@ -344,8 +344,11 @@ HELP_SECTIONS = [
      "    5.  Right-click an item to add it to your Watchlist, or to ignore "
      "it so it stops appearing.\n\n"
      "The tabs, left to right: FlipRec · Watchlist · Ignored List · "
-     "Volatile · Search · Ask AI · News · Help. If the window is too narrow "
-     "for a table, a sideways scrollbar appears under it."),
+     "Volatile · Search · Ask AI · News · Settings · Help. If the window is "
+     "too narrow for a table, a sideways scrollbar appears under it.\n\n"
+     "To find something in Help, type a word or phrase in Search help at the "
+     "top of this tab. Every match is highlighted; Enter goes to the next one, "
+     "Shift+Enter to the one before."),
 
     ("The bar above the tabs",
      "These settings apply across the app, whichever tab you're on:\n\n"
@@ -397,8 +400,8 @@ HELP_SECTIONS = [
      "(Buy) and sell at the latest instant-buy price (Sell), the same "
      "numbers an in-game margin check gives you.\n\n"
      "Controls:\n"
-     "    •  Hide inactive — hides items whose margin isn't real (see "
-     "Inactive below).\n"
+     "    •  Hide inactive — on the Settings tab. Hides items whose margin "
+     "isn't real (see Inactive below). With it off, their Note says Inactive.\n"
      "    •  Traded within — hides items where a side hasn't traded in that "
      "long, going by the same age as Last trade. It applies to every Show "
      "choice except Inactive. It's applied when prices update or you change a "
@@ -457,8 +460,11 @@ HELP_SECTIONS = [
      "margin is probably not real.\n"
      "    •  Unprofitable — (Watchlist only) the tax eats the whole "
      "margin.\n\n"
-     "Sorting the Verdict column goes Profitable → Marginal → Unsteady → "
-     "Suspect → Inactive, best profit first within each."),
+     "FlipRec has no Verdict column: choose one in Show, and the row color "
+     "tells them apart — green for Profitable, yellow for Marginal, Unsteady "
+     "and Suspect, and grey for Inactive. On the Watchlist, sorting the Verdict "
+     "column goes Profitable → Marginal → Unsteady → Suspect → Inactive, best "
+     "profit first within each."),
 
     ("The GE tax",
      "The seller pays 2% of the sell price, rounded down, per item:\n\n"
@@ -491,7 +497,7 @@ HELP_SECTIONS = [
      "within the hour returns quietly, without flashing.\n"
      "    •  The FlipRec tab shows how many alerts are live, e.g. FlipRec (3), "
      "whatever Show is set to. New ones flash the taskbar on Windows or bounce "
-     "the Dock icon on macOS, if the checkbox beside the threshold is on.\n"
+     "the Dock icon on macOS, if that's turned on in Settings.\n"
      "    •  If checks keep failing, alerts disappear once their prices "
      "are too old to trust: after 5 minutes, or two check periods if that "
      "is longer.\n"
@@ -518,15 +524,15 @@ HELP_SECTIONS = [
      "or 1.5m.\n"
      "    •  A met target gets a ✓ and a gold row, and the tab shows how many "
      "items have one, e.g. Watchlist (1). If the app isn't in front, the taskbar "
-     "flashes on Windows or the Dock icon bounces on macOS, if that checkbox on "
-     "FlipRec is on.\n"
+     "flashes on Windows or the Dock icon bounces on macOS, if that's turned "
+     "on in Settings.\n"
      "    •  It's checked with every market check, only while the app is "
      "open, against the latest trade. One odd trade can meet a target, so check "
      "the price before acting.\n"
      "    •  A target stays set until you change it. If the price stays there, "
      "or comes back within the hour, it won't flash again.\n\n"
      "Click a column header to sort (oldest added first to start); click "
-     "again to reverse. Verdict sorts by rank, as on FlipRec."),
+     "again to reverse. Verdict sorts by rank, best first."),
 
     ("Ignored List — items you never want to see",
      "Right-click an item and choose Ignore item to add it here, or click "
@@ -1143,6 +1149,8 @@ class OSRSTrackerApp:
                         foreground=COLOR_DIM, font=FONT_BODY)
         style.configure("Header.TLabel", background=COLOR_BG,
                         foreground=COLOR_ACCENT, font=FONT_HEADER)
+        style.configure("Section.TLabel", background=COLOR_BG,
+                        foreground=COLOR_ACCENT, font=(SERIF, 13, "bold"))
         style.configure("Item.TLabel", background=COLOR_PANEL,
                         foreground=COLOR_ACCENT, font=FONT_TITLE)
         style.configure("Stat.TLabel", background=COLOR_PANEL,
@@ -1313,6 +1321,7 @@ class OSRSTrackerApp:
         self.volatile_tab = self._build_volatile_tab()
         self.fliprec_tab = self._build_fliprec_tab()
         self.news_tab = self._build_news_tab()
+        self.settings_tab = self._build_settings_tab()
         self.help_tab = self._build_help_tab()
 
         self.notebook.add(self.fliprec_tab, text="FlipRec")
@@ -1322,6 +1331,7 @@ class OSRSTrackerApp:
         self.notebook.add(self.search_tab, text="Search")
         self.notebook.add(self.ai_tab, text="Ask AI")
         self.notebook.add(self.news_tab, text="News")
+        self.notebook.add(self.settings_tab, text="Settings")
         self.notebook.add(self.help_tab, text="Help")
 
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
@@ -3194,7 +3204,6 @@ class OSRSTrackerApp:
         ("net",     "Net / item",  "net",       85,  "e",      True),
         ("tax",     "GE tax",      "tax",       64,  "e",      True),
         ("limit",   "4h limit",    "limit",     72,  "e",      True),
-        ("verdict", "Verdict",     "verdict",   80,  "center", True),
         ("signal",  "Note",        "note",      165, "w",      False),
     ]
 
@@ -3230,15 +3239,10 @@ class OSRSTrackerApp:
         self.alert_threshold_var.trace_add(
             "write", lambda *_: self._schedule_threshold_change())
         ttk.Label(controls, text="gp", style="TLabel"
-                  ).pack(side="left", padx=(0, 10))
+                  ).pack(side="left", padx=(0, 16))
+        # Set on the Settings tab.
         self.alert_flash_var = tk.BooleanVar(
             value=prefs.get("alert_flash", True))
-        if FLASH_LABEL:
-            ttk.Checkbutton(controls, text=FLASH_LABEL,
-                            variable=self.alert_flash_var,
-                            command=lambda: self._save_settings(
-                                {"alert_flash": bool(self.alert_flash_var.get())})
-                            ).pack(side="left", padx=(0, 16))
 
         ttk.Label(controls, text="Show:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
@@ -3255,12 +3259,9 @@ class OSRSTrackerApp:
         show_combo.bind("<<ComboboxSelected>>",
                         lambda _e: self._apply_flip_filters())
 
+        # Set on the Settings tab.
         self.flip_hide_inactive_var = tk.BooleanVar(
             value=prefs.get("flip_hide_inactive", True))
-        ttk.Checkbutton(controls, text="Hide inactive",
-                        variable=self.flip_hide_inactive_var,
-                        command=self._apply_flip_filters
-                        ).pack(side="left", padx=(0, 16))
 
         ttk.Label(limits, text="Traded within:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
@@ -3399,6 +3400,8 @@ class OSRSTrackerApp:
 
     def _flip_note(self, r: dict, fmt) -> str:
         """The Note column. There's room for one, so the most useful one wins."""
+        if not r["active"]:
+            return "⚠ Inactive: a side idle 1h+"
         if not r["backed_5m"]:
             return f"5m margin only {fmt(r['net_5m'])}"
         if r["verdict"] == "Unsteady":
@@ -3465,7 +3468,7 @@ class OSRSTrackerApp:
             banner.append(
                 f"⚠ {len(inactive)} item(s) hidden: no trade on one side in "
                 f"the last hour, so their margin is likely not real. Untick "
-                f"'Hide inactive' to see them.")
+                f"Hide inactive on the Settings tab to see them.")
         elif inactive:
             banner.append(
                 f"⚠ {len(inactive)} item(s) are inactive (no trade on one "
@@ -3495,16 +3498,51 @@ class OSRSTrackerApp:
         for r in rows:
             tag = {"Profitable": "good", "Marginal": "warn", "Unsteady": "warn",
                    "Suspect": "warn"}.get(r["verdict"], "dim")
-            verdict = "⚠ Inactive" if not r["active"] else r["verdict"]
             cells = self._shared_cells(r, fmt)
             cells.update(net=fmt(r["net"]), tax=fmt(r["tax"]),
                          limit=fmt(r["limit"]) if r["limit"] else "?",
-                         verdict=verdict, signal=self._flip_note(r, fmt))
+                         signal=self._flip_note(r, fmt))
             iid = tree.insert("", "end", tags=(tag,),
                               values=row_values(self.FLIP_COLUMNS, cells))
             self.flip_id_map[iid] = r["item_id"]
             ages[iid] = r["traded_at"]
         self._restore_tree_view(tree, self.flip_id_map, view)
+
+    # ── Settings tab ──────────────────────────────────────────────────────────
+
+    def _build_settings_tab(self) -> ttk.Frame:
+        """Choices you set once and leave. Each is saved as soon as it
+        changes. Its variables belong to the tabs that use them."""
+        frame = ttk.Frame(self.notebook)
+        body = ttk.Frame(frame)
+        body.pack(fill="x", padx=20, pady=(20, 0))
+        self._settings_boxes = {}
+
+        def setting(title, box, var, command, note):
+            ttk.Label(body, text=title, style="Section.TLabel"
+                      ).pack(anchor="w", pady=(0, 6))
+            self._settings_boxes[box] = ttk.Checkbutton(
+                body, text=box, variable=var, command=command)
+            self._settings_boxes[box].pack(anchor="w")
+            ttk.Label(body, text=note, style="Dim.TLabel", wraplength=720,
+                      justify="left").pack(anchor="w", padx=(26, 0),
+                                           pady=(2, 18))
+
+        setting("FlipRec", "Hide inactive", self.flip_hide_inactive_var,
+                self._apply_flip_filters,
+                "Hides items where one side hasn't traded in the last hour, "
+                "so their margin is likely not real. FlipRec says how many it "
+                "hid. Choosing Inactive in Show lists them anyway.")
+        if FLASH_LABEL:
+            signal = ("flashes the taskbar button" if sys.platform == "win32"
+                      else "bounces the Dock icon")
+            setting("Alerts", FLASH_LABEL, self.alert_flash_var,
+                    lambda: self._save_settings(
+                        {"alert_flash": bool(self.alert_flash_var.get())}),
+                    f"When a new alert arrives or a Watchlist target is met "
+                    f"while the app isn't in front, it {signal}. With this "
+                    f"off, alerts and targets still show and count.")
+        return frame
 
     # ── News tab ──────────────────────────────────────────────────────────────
 
@@ -4633,6 +4671,30 @@ class OSRSTrackerApp:
         ttk.Label(about, textvariable=self.update_status, style="Dim.TLabel"
                   ).pack(side="left", padx=12)
 
+        find = ttk.Frame(frame)
+        find.pack(fill="x", padx=20, pady=(16, 0))
+        ttk.Label(find, text="Search help:", style="TLabel"
+                  ).pack(side="left", padx=(0, 8))
+        self.help_find_var = tk.StringVar()
+        self.help_find_entry = ttk.Entry(find, textvariable=self.help_find_var,
+                                         width=30, font=FONT_BODY)
+        self.help_find_entry.pack(side="left", padx=(0, 8))
+        ttk.Button(find, text="Previous", command=lambda: self._help_step(-1)
+                   ).pack(side="left", padx=(0, 4))
+        ttk.Button(find, text="Next", command=lambda: self._help_step(1)
+                   ).pack(side="left")
+        self.help_find_status = tk.StringVar(value="")
+        ttk.Label(find, textvariable=self.help_find_status, style="Dim.TLabel"
+                  ).pack(side="left", padx=12)
+        self.help_find_var.trace_add("write", lambda *_: self._help_find())
+        self.help_find_entry.bind("<Return>", lambda _e: self._help_step(1))
+        self.help_find_entry.bind("<Shift-Return>",
+                                  lambda _e: self._help_step(-1))
+        self.help_find_entry.bind("<Escape>",
+                                  lambda _e: self.help_find_var.set(""))
+        self._help_matches = []          # (start, end) of each match
+        self._help_match_at = 0
+
         text = scrolledtext.ScrolledText(
             frame, wrap="word",
             background=COLOR_PANEL, foreground=COLOR_TEXT,
@@ -4641,7 +4703,8 @@ class OSRSTrackerApp:
             padx=24, pady=20,
             font=FONT_BODY,
         )
-        text.pack(fill="both", expand=True, padx=20, pady=20)
+        text.pack(fill="both", expand=True, padx=20, pady=(10, 20))
+        self.help_text = text
 
         text.tag_configure("h1", foreground=COLOR_ACCENT,
                            font=(SERIF, 16, "bold"),
@@ -4652,9 +4715,55 @@ class OSRSTrackerApp:
         for heading, body in HELP_SECTIONS:
             text.insert("end", heading + "\n", "h1")
             text.insert("end", body + "\n\n", "body")
+        text.tag_configure("match", background=COLOR_BORDER)
+        text.tag_configure("match_now", background=COLOR_ACCENT,
+                           foreground=COLOR_BG)
+        text.tag_raise("match_now")
 
         text.configure(state="disabled")
         return frame
+
+    def _help_find(self):
+        """Highlight every match of the search box in Help, ignoring case,
+        and go to the first."""
+        text = self.help_text
+        text.tag_remove("match", "1.0", "end")
+        text.tag_remove("match_now", "1.0", "end")
+        self._help_matches = []
+        query = self.help_find_var.get().strip()
+        if not query:
+            self.help_find_status.set("")
+            return
+        start, length = "1.0", tk.IntVar()
+        while True:
+            found = text.search(query, start, "end", nocase=True, count=length)
+            if not found or not length.get():
+                break
+            end = f"{found}+{length.get()}c"
+            self._help_matches.append((found, end))
+            text.tag_add("match", found, end)
+            start = end
+        if not self._help_matches:
+            self.help_find_status.set("No matches")
+            return
+        self._help_match_at = 0
+        self._help_show_match()
+
+    def _help_step(self, step: int):
+        """Go to the next (1) or previous (-1) match, wrapping round."""
+        if self._help_matches:
+            self._help_match_at = ((self._help_match_at + step)
+                                   % len(self._help_matches))
+            self._help_show_match()
+        return "break"
+
+    def _help_show_match(self):
+        start, end = self._help_matches[self._help_match_at]
+        self.help_text.tag_remove("match_now", "1.0", "end")
+        self.help_text.tag_add("match_now", start, end)
+        self.help_text.see(start)
+        self.help_find_status.set(
+            f"{self._help_match_at + 1} of {len(self._help_matches)}")
 
     # ── About: updates, data folder, error reporting ──────────────────────────
 

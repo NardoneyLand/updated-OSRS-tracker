@@ -262,9 +262,9 @@ def scenario():
         # With the checkbox off an alert still shows and counts, but doesn't flash
         def widgets(w):
             return [w] + [d for c in w.winfo_children() for d in widgets(c)]
-        boxes = [w for w in widgets(app.fliprec_tab) if w.winfo_class() == "TCheckbutton"
+        boxes = [w for w in widgets(app.settings_tab) if w.winfo_class() == "TCheckbutton"
                  and w.cget("text") == gui.FLASH_LABEL]
-        check(len(boxes) == (1 if gui.FLASH_LABEL else 0) and app.alert_flash_var.get() is True, "the checkbox is on FlipRec, on by default")
+        check(len(boxes) == (1 if gui.FLASH_LABEL else 0) and app.alert_flash_var.get() is True, "the checkbox is on Settings, on by default")
         if boxes:
             boxes[0].invoke()
             check(settings.load()["alert_flash"] is False, "turning it off is saved")

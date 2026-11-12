@@ -3,6 +3,19 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.9 — 2026-11-12
+
+**Added**
+- A Settings tab, between News and Help. Hide inactive and Flash taskbar (Bounce Dock
+  icon on macOS) have moved there from FlipRec. They keep their saved choices.
+- Help has a search box. Every match is highlighted; Enter goes to the next one and
+  Shift+Enter to the one before.
+
+**Changed**
+- FlipRec no longer has a Verdict column, since Show already picks the verdict and the
+  row color tells them apart. An inactive item's Note now says Inactive. The Watchlist
+  keeps its Verdict column.
+
 ## 1.6.8 — 2026-11-12
 
 **Added**

@@ -315,8 +315,8 @@ def scenario():
         app._market = (LATEST, BULK, time.time(), BULK_5M)
         app._update_tables()
         settle(lambda: False, 0.1)
-        verdicts = table(app.flip_tree, "verdict")
-        check(verdicts.get("Shaky item") == "Unsteady" and verdicts.get("Steady item") == "Profitable", f"FlipRec shows the verdict: {verdicts}")
+        tags = {app.flip_tree.item(i, "values")[0]: app.flip_tree.item(i, "tags")[0] for i in app.flip_tree.get_children()}
+        check(tags.get("Shaky item") == "warn" and tags.get("Steady item") == "good", f"FlipRec shows the verdict by color: {tags}")
         notes = table(app.flip_tree, "signal")
         check(notes.get("Shaky item") == "Held 30%, usually -22", f"and why: {notes.get('Shaky item')}")
         tag = next(app.flip_tree.item(i, "tags")[0] for i in app.flip_tree.get_children() if app.flip_tree.item(i, "values")[0] == "Shaky item")
@@ -325,7 +325,7 @@ def scenario():
         app.flip_show_var.set("Unsteady")
         app._apply_flip_filters()
         settle(lambda: False, 0.1)
-        check(set(table(app.flip_tree, "verdict")) == {"Shaky item"}, "Show can pick out Unsteady flips")
+        check(set(table(app.flip_tree, "item")) == {"Shaky item"}, "Show can pick out Unsteady flips")
 
         # They still alert, marked
         app._evaluate_alerts()
@@ -335,7 +335,7 @@ def scenario():
         app.flip_show_var.set("Alerts")
         app._apply_flip_filters()
         settle(lambda: False, 0.1)
-        check(table(app.flip_tree, "verdict").get("Shaky item") == "Unsteady", "and the Alerts view marks them")
+        check(table(app.flip_tree, "signal").get("Shaky item", "").startswith("Held 30%"), "and the Alerts view marks them")
 
         # The Note column sorts by what it shows
         app.flip_show_var.set("All verdicts")
@@ -353,7 +353,7 @@ def scenario():
         for row in app.flip_results:
             row["traded_at"] = now_t - {"Steady item": 50, "Shaky item": 200, "Low item": 700}.get(row["name"], 5000)
         def listed():
-            return set(table(app.flip_tree, "verdict"))
+            return set(table(app.flip_tree, "item"))
         app._render_fliprec_table()
         everything = listed()
         check({"Steady item", "Shaky item", "Low item"} <= everything, f"Any time hides nothing: {everything}")

@@ -203,7 +203,7 @@ def scenario():
         app._apply_flip_filters()
         settle()
         f = table(app.flip_tree, app.flip_id_map)
-        check(f["Voidwaker"]["verdict"] == "Suspect" and f["Voidwaker"]["signal"].startswith("5m margin only"), "FlipRec explains: " + f["Voidwaker"]["signal"])
+        check(f["Voidwaker"]["signal"].startswith("5m margin only"), "FlipRec explains: " + f["Voidwaker"]["signal"])
         check(f["Slow item"]["age"].startswith("⏱ 6m"), "FlipRec flags trades over 5 min: " + f["Slow item"]["age"])
         check("not traded in the last 5 min" in app.flip_banner.get(), "FlipRec banner says 5 min")
         app.notebook.select(app.fliprec_tab)

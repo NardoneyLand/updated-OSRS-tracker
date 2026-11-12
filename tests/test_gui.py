@@ -104,7 +104,7 @@ def scenario():
         app.notebook.select(app.ai_tab)
         root.update()
         tabs = [app.notebook.tab(t, "text") for t in app.notebook.tabs()]
-        check(tabs == ["FlipRec", "Watchlist", "Ignored List", "Volatile", "Search", "Ask AI", "News", "Help"], f"tab order {tabs}")
+        check(tabs == ["FlipRec", "Watchlist", "Ignored List", "Volatile", "Search", "Ask AI", "News", "Settings", "Help"], f"tab order {tabs}")
         check(app.ai_model_var.get() == "claude-opus-5-5", "Anthropic default model")
         check("No Anthropic key" in app.ai_key_status.get(), "key status says no key")
         wait_for(lambda: app.item_data)
