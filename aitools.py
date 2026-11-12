@@ -89,8 +89,10 @@ TOOLS = [
     {
         "name": "get_price_range",
         "description": (
-            "One item's prices and trading over a time range, the same numbers "
-            "shown beside the Search chart: the highest, lowest and average buy "
+            "One item's prices and trading over a time range, worked out like "
+            "the stats beside the Search chart but from the Wiki's averages "
+            "only (the chart can also include single trades seen live): the "
+            "highest, lowest and average buy "
             "and sell prices, units traded each side and in total, the pace per "
             "hour or day, gp traded, buy pressure (the % of units that were "
             "instant buys), the change over the range, the typical margin after "
@@ -288,6 +290,16 @@ def _log_lookup(name: str, args, result: dict) -> None:
     elif name == "get_price_range":
         summary = (f"{result['name']} {result['range']}: "
                    f"{result['data_points']} points")
+        buy, sell = result.get("buy_price"), result.get("sell_price")
+        if buy and sell:
+            summary += (f", buy {buy['lowest']}-{buy['highest']}, "
+                        f"sell {sell['lowest']}-{sell['highest']}")
+        if result.get("units_traded"):
+            summary += f", traded {result['units_traded']['total']}"
+        live = result.get("live")
+        if live:
+            summary += (f", live buy {live['buy']} sell {live['sell']}, "
+                        f"prices checked {live['prices_checked_at']}")
     elif name == "get_movers":
         summary = f"{len(result['movers'])} movers over {result['window']}"
         rows = result["movers"]

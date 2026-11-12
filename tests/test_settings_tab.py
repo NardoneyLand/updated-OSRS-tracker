@@ -100,6 +100,12 @@ def scenario():
             boxes[gui.FLASH_LABEL].invoke()
             check(settings.load()["alert_flash"] is True, "and turned back on")
 
+        # Without a Verdict column, a Suspect row flagged only for its ROI says so
+        suspect = {"active": True, "backed_5m": True, "verdict": "Suspect", "roi": 55.0,
+                   "reversion": "", "margin_unknown": False}
+        note = app._flip_note(suspect, str)
+        check(note.startswith("Suspect: 55% ROI"), f"a too-good ROI is noted: {note!r}")
+
         # Searching Help
         app.notebook.select(app.help_tab)
         root.geometry("1380x860")

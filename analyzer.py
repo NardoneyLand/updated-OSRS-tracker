@@ -367,15 +367,16 @@ def margin_at_5m_prices(avg_5m: Optional[dict], buy: int, sell: int, net: int,
     return net_5m, net <= 0 or net_5m >= net * FLIP_MIN_5M_SUPPORT
 
 
-def margin_history(prices: Optional[List[Tuple[int, int]]], exempt: bool = False
+def margin_history(prices: Optional[List[Tuple[int, int]]], exempt: bool = False,
+                   min_periods: int = FLIP_HELD_MIN_PERIODS
                    ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
     """
     How a margin has behaved, from (average high, average low) price pairs:
     the % of periods it was positive after tax, its median, and how many periods
-    that covers. All None if there are too few periods to tell.
+    that covers. All None if there are fewer than min_periods to tell.
     """
     margins = [high - ge_tax(high, exempt) - low for high, low in prices or []]
-    if len(margins) < FLIP_HELD_MIN_PERIODS:
+    if len(margins) < min_periods:
         return None, None, None
     return (sum(m > 0 for m in margins) * 100 // len(margins),
             statistics.median_low(margins), len(margins))
@@ -449,10 +450,9 @@ def range_stats(rows, step_seconds: int, exempt: bool = False) -> Optional[dict]
     buy_high, buy_low, buy_avg = side(1, 4)
     first_mid, last_mid = mid(rows[0]), mid(rows[-1])
 
-    margins = [h - ge_tax(h, exempt) - l for h, l, _ts, hv, lv in rows
-               if h and l and hv != 0 and lv != 0]
-    if len(margins) < RANGE_MIN_MARGIN_PERIODS:
-        margins = []
+    margin_positive, margin, margin_periods = margin_history(
+        [(h, l) for h, l, _ts, hv, lv in rows if h and l and hv != 0 and lv != 0],
+        exempt, RANGE_MIN_MARGIN_PERIODS)
 
     traded = [r for r in rows if r[3] is not None or r[4] is not None]
     if traded:
@@ -471,10 +471,8 @@ def range_stats(rows, step_seconds: int, exempt: bool = False) -> Optional[dict]
         "buy_high": buy_high, "buy_low": buy_low, "buy_avg": buy_avg,
         "first_mid": round(first_mid), "last_mid": round(last_mid),
         "change_pct": (last_mid - first_mid) / first_mid * 100,
-        "margin": statistics.median_low(margins) if margins else None,
-        "margin_positive": (sum(m > 0 for m in margins) * 100 // len(margins)
-                            if margins else None),
-        "margin_periods": len(margins),
+        "margin": margin, "margin_positive": margin_positive,
+        "margin_periods": margin_periods or 0,
         "instant_buys": instant_buys, "instant_sells": instant_sells,
         "gp_traded": gp_traded, "per_hour": per_hour,
         "buy_pressure": instant_buys * 100 / units if units else None,

@@ -3,6 +3,16 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.10 — 2026-11-12
+
+**Fixed**
+- Unticking Hide inactive on the Settings tab is saved even while FlipRec's Capital box
+  holds something that isn't an amount.
+- A FlipRec row rated Suspect only for its very high ROI now says so in its Note. Without
+  the Verdict column it looked the same as a Marginal row.
+- Ask AI's log now records the prices and volumes it read for an item's time range, so a
+  wrong answer can be checked.
+
 ## 1.6.9 — 2026-11-12
 
 **Added**

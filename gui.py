@@ -492,7 +492,7 @@ HELP_SECTIONS = [
      "    •  Only actively traded items count: both sides must have "
      "traded in the last 5 minutes. Suspect items are left out, including "
      "margins the last 5 minutes' average prices don't back up. Unsteady items "
-     "still alert, marked by their verdict and row color.\n"
+     "still alert, marked by their row color and Note.\n"
      "    •  Each item alerts at most once an hour. An alert that comes back "
      "within the hour returns quietly, without flashing.\n"
      "    •  The FlipRec tab shows how many alerts are live, e.g. FlipRec (3), "
@@ -3375,14 +3375,7 @@ class OSRSTrackerApp:
         key, desc = self.flip_sort
         if key is None:
             return
-        if key == "verdict":
-            # Rank, not alphabetical: ▼ = Profitable, Marginal, Unsteady, Suspect,
-            # Inactive; ▲ reverses it. Ties keep the best profit first.
-            self.flip_results.sort(key=lambda r: -(r["profit"] or r["net"]))
-            self.flip_results.sort(
-                key=lambda r: analyzer.VERDICT_RANK[r["verdict"]],
-                reverse=desc)
-        elif key == "note":
+        if key == "note":
             fmt = self._price_fmt()
             self.flip_results.sort(key=lambda r: self._flip_note(r, fmt).lower(),
                                    reverse=desc)
@@ -3406,6 +3399,8 @@ class OSRSTrackerApp:
             return f"5m margin only {fmt(r['net_5m'])}"
         if r["verdict"] == "Unsteady":
             return f"Held {r['margin_held']}%, usually {fmt(r['typical_margin'])}"
+        if r["verdict"] == "Suspect" and r["roi"] > analyzer.FLIP_MAX_ROI:
+            return f"Suspect: {r['roi']:.0f}% ROI, too good to be true"
         if r["reversion"]:
             return f"{r['reversion']} ({r['reversion_pct']:+.1f}%)"
         return "History not ready" if r["margin_unknown"] else ""
@@ -3528,8 +3523,15 @@ class OSRSTrackerApp:
                       justify="left").pack(anchor="w", padx=(26, 0),
                                            pady=(2, 18))
 
+        def hide_inactive():
+            # Saved first: _apply_flip_filters saves nothing while the
+            # capital on FlipRec isn't a valid amount.
+            self._save_settings({"flip_hide_inactive":
+                                 bool(self.flip_hide_inactive_var.get())})
+            self._apply_flip_filters()
+
         setting("FlipRec", "Hide inactive", self.flip_hide_inactive_var,
-                self._apply_flip_filters,
+                hide_inactive,
                 "Hides items where one side hasn't traded in the last hour, "
                 "so their margin is likely not real. FlipRec says how many it "
                 "hid. Choosing Inactive in Show lists them anyway.")
