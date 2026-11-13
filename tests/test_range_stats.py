@@ -51,10 +51,8 @@ check(abs(where["buy_above_low_pct"] - 15) < 0.01 and abs(where["sell_above_low_
 check(abs(where["buy_below_high_pct"] - (1300 - 1150) / 1150 * 100) < 0.01 and where["sell_below_high_pct"] < 0, f"and below its high, negative past it: {where}")
 check(analyzer.range_position(None, 1320, 1150)["buy_above_low_pct"] is None and analyzer.range_position(s, None, None)["sell_above_low_pct"] is None, "unknown without a range or a live price")
 
-pts = [{"timestamp": 100, "avgHighPrice": 5, "avgLowPrice": 4, "highPriceVolume": 1, "lowPriceVolume": 2},
-       {"timestamp": 200, "avgHighPrice": None, "avgLowPrice": 4, "highPriceVolume": 0, "lowPriceVolume": 3},
-       {"timestamp": 300, "avgHighPrice": None, "avgLowPrice": None, "highPriceVolume": 0, "lowPriceVolume": 0}]
-check(analyzer.timeseries_rows(pts, 150) == [(4, 4, 200, 0, 3)], f"API points become rows from a start time: {analyzer.timeseries_rows(pts, 150)}")
+check([analyzer.range_includes_live(w) for _l, w, _s in analyzer.CHART_RANGES] == [True] * 4 + [False] * 3,
+      "live snapshots show on 1H to 1W only")
 check([r[0] for r in analyzer.CHART_RANGES] == ["1H", "12H", "1D", "1W", "1M", "1Y", "All"] and gui.HISTORY_RANGES is analyzer.CHART_RANGES, "the chart and Ask AI share one list of ranges")
 
 # ── Stored volumes ───────────────────────────────────────────────────────────
@@ -226,9 +224,34 @@ def scenario():
         check("error" in tools.run("get_price_range", {"name": "zzzzqqq"}), "an unknown item is an error")
         check("error" in tools.run("get_price_range", {}), "a missing name is an error")
         api.get_timeseries = lambda item_id, timestep="1h": []
-        empty = tools.run("get_price_range", {"name": "whip"})
+        again = tools.run("get_price_range", {"name": "whip", "range": "1M"})
+        check(again.get("data_points") == m, f"a failed download still answers from what's stored: {again.get('data_points')}")
+        lonely = aitools.MarketTools(lambda: MAPPING + [{"id": 99, "name": "Unseen thing", "limit": 5, "members": True}])
+        empty = lonely.run("get_price_range", {"name": "Unseen thing"})
         check(empty["data_points"] == 0 and "note" in empty, f"no history says so: {empty}")
         api.get_timeseries = lambda item_id, timestep="1h": series(timestep)
+        # The log line holds what the AI read, and leaves out a side with no prices
+        logged = []
+        real_info = aitools.applog.log.info
+        aitools.applog.log.info = logged.append
+        try:
+            aitools._log_lookup("get_price_range", {"name": "whip"}, dict(
+                got, sell_price={"highest": None, "lowest": None, "average": None},
+                live={"buy": 2_300_000, "sell": None, "prices_checked_at": "12:00"}))
+        finally:
+            aitools.applog.log.info = real_info
+        line = logged[0] if logged else ""
+        check("None" not in line and "buy " in line and "sell " not in line.split("live")[0].replace("buy ", ""),
+              f"a side with no prices is left out of the log: {line!r}")
+        check(all(w in line for w in ("margin ", "change % ", "buy pressure % ", "live buy 2300000", "prices checked 12:00")),
+              f"and it has the margin, change, pressure and live quote: {line!r}")
+
+        # A live snapshot counts on short ranges, as it does on the chart
+        db.record_price(1, "Abyssal whip", 9_999_999, 2_300_000)
+        day = tools.run("get_price_range", {"name": "whip", "range": "1D"})
+        check(day.get("sell_price", {}).get("highest") == 9_999_999, f"Ask AI sees the live snapshot the chart shows: {day.get('sell_price')}")
+        month = tools.run("get_price_range", {"name": "whip", "range": "1M"})
+        check(month["sell_price"]["highest"] == 2_400_000, f"but not on long ranges: {month['sell_price']}")
         check(any(t["name"] == "get_price_range" for t in aitools.TOOLS) and "get_price_range" in aitools.STATUS_TEXT, "it's offered to the AI")
         check("get_price_range" in ai.SYSTEM_PROMPT, "and the AI is told what it's for")
 

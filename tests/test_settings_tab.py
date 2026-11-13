@@ -100,11 +100,49 @@ def scenario():
             boxes[gui.FLASH_LABEL].invoke()
             check(settings.load()["alert_flash"] is True, "and turned back on")
 
-        # Without a Verdict column, a Suspect row flagged only for its ROI says so
-        suspect = {"active": True, "backed_5m": True, "verdict": "Suspect", "roi": 55.0,
-                   "reversion": "", "margin_unknown": False}
-        note = app._flip_note(suspect, str)
-        check(note.startswith("Suspect: 55% ROI"), f"a too-good ROI is noted: {note!r}")
+        # While Capital isn't an amount, the other settings are still saved and shown
+        app.flip_capital_var.set("abc")
+        app.market_status.set("Prices updated")
+        boxes["Hide inactive"].invoke()
+        settle()
+        check(settings.load()["flip_hide_inactive"] is False, "Hide inactive is saved with a bad Capital")
+        check("Dead item" in rows(), f"and FlipRec follows it: {rows()}")
+        check(app.market_status.get() == "Prices updated", f"without a Capital error for an unrelated box: {app.market_status.get()!r}")
+        boxes["Hide inactive"].invoke()
+        settle()
+        check(settings.load()["flip_hide_inactive"] is True and "Dead item" not in rows(), "and ticked again")
+        app.flip_show_var.set("Profitable")
+        app._apply_flip_filters()
+        check(settings.load()["flip_show"] == "Profitable", "FlipRec's own filters are saved with a bad Capital too")
+        check(app.market_status.get() == gui.CAPITAL_ERROR and settings.load().get("capital") != "abc",
+              "while the bad Capital itself isn't, and says so")
+        app.flip_capital_var.set("")
+        app.flip_show_var.set("All verdicts")
+        app._apply_flip_filters()
+        settle()
+
+        # Without a Verdict column, a Suspect row flagged for its ROI says so,
+        # judged by analyzer before the ROI is rounded
+        base = {"active": True, "backed_5m": True, "verdict": "Suspect", "roi": 40.0,
+                "reversion": "", "reversion_pct": 0.0, "margin_unknown": False, "too_good": True}
+        note = app._flip_note(base, str)
+        check(note == "Suspect: ROI over 40%", f"a too-good ROI is noted: {note!r}")
+        both = app._flip_note(dict(base, reversion="Extreme spike", reversion_pct=31.0), str)
+        check("Extreme spike (+31.0%)" in both and "ROI over 40%" in both, f"an Extreme reversion still shows beside it: {both!r}")
+        import analyzer
+        # A ROI just over the limit that rounds to exactly 40.0 is still flagged
+        item = {"id": 9, "name": "Edge", "limit": 10}
+        lt = {"high": 0, "low": 25_000, "highTime": now, "lowTime": now}
+        avg = {"highPriceVolume": 50, "lowPriceVolume": 50}
+        edge = None
+        for sell in range(35_600, 35_800):
+            r = analyzer.flip_row(item, dict(lt, high=sell), avg, now=now)
+            if r["roi"] == 40.0 and r["net"] * 100 / r["buy"] > 40:
+                edge = r
+                break
+        check(edge is not None and edge["too_good"] and edge["verdict"] == "Suspect"
+              and app._flip_note(edge, str).startswith("Suspect: ROI over 40%"),
+              f"a ROI shown as 40.0 but over 40 is still noted: {edge and app._flip_note(edge, str)!r}")
 
         # Searching Help
         app.notebook.select(app.help_tab)

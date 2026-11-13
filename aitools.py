@@ -89,10 +89,8 @@ TOOLS = [
     {
         "name": "get_price_range",
         "description": (
-            "One item's prices and trading over a time range, worked out like "
-            "the stats beside the Search chart but from the Wiki's averages "
-            "only (the chart can also include single trades seen live): the "
-            "highest, lowest and average buy "
+            "One item's prices and trading over a time range, the same numbers "
+            "shown beside the Search chart: the highest, lowest and average buy "
             "and sell prices, units traded each side and in total, the pace per "
             "hour or day, gp traded, buy pressure (the % of units that were "
             "instant buys), the change over the range, the typical margin after "
@@ -290,15 +288,24 @@ def _log_lookup(name: str, args, result: dict) -> None:
     elif name == "get_price_range":
         summary = (f"{result['name']} {result['range']}: "
                    f"{result['data_points']} points")
-        buy, sell = result.get("buy_price"), result.get("sell_price")
-        if buy and sell:
-            summary += (f", buy {buy['lowest']}-{buy['highest']}, "
-                        f"sell {sell['lowest']}-{sell['highest']}")
+        for side in ("buy", "sell"):
+            p = result.get(f"{side}_price") or {}
+            if p.get("lowest") is not None:
+                summary += (f", {side} {p['lowest']}-{p['highest']} "
+                            f"avg {p['average']}")
         if result.get("units_traded"):
             summary += f", traded {result['units_traded']['total']}"
-        live = result.get("live")
-        if live:
-            summary += (f", live buy {live['buy']} sell {live['sell']}, "
+        for key, label in (("typical_margin_after_tax", "margin"),
+                           ("margin_positive_pct", "margin positive %"),
+                           ("change_pct", "change %"),
+                           ("buy_pressure_pct", "buy pressure %")):
+            if result.get(key) is not None:
+                summary += f", {label} {result[key]}"
+        live = result.get("live") or {}
+        quotes = [f"{k} {live[k]}" for k in ("buy", "sell")
+                  if live.get(k) is not None]
+        if quotes:
+            summary += (f", live {' '.join(quotes)}, "
                         f"prices checked {live['prices_checked_at']}")
     elif name == "get_movers":
         summary = f"{len(result['movers'])} movers over {result['window']}"
@@ -539,8 +546,14 @@ class MarketTools:
             r for r in analyzer.CHART_RANGES if r[0] == label)
         size = api.STEP_SECONDS[step]
         since = int(time.time()) - window if window else 0
-        rows = analyzer.timeseries_rows(
-            api.get_timeseries(item["id"], timestep=step), since)
+        # Stored as the chart stores them, then read back the way the chart
+        # reads them, so both give the same numbers. If the download fails,
+        # what's already stored still answers.
+        db.backfill_price_history(item["id"], item["name"],
+                                  api.get_timeseries(item["id"], timestep=step),
+                                  step)
+        rows = db.get_price_range(item["id"], since, step,
+                                  include_live=analyzer.range_includes_live(window))
         stats = analyzer.range_stats(
             rows, size, exempt=item["name"] in analyzer.GE_TAX_EXEMPT_NAMES)
         result = {"name": item["name"], "range": label, "data_points": len(rows),
@@ -575,9 +588,10 @@ class MarketTools:
             "change_pct": rounded(stats["change_pct"], 2),
             "typical_margin_after_tax": stats["margin"],
             "margin_positive_pct": stats["margin_positive"],
-            "note": (f"Each point is a {size // 60}-minute average, so single "
-                     "trades may have gone past the highest and lowest. "
-                     "units_traded null means the Wiki sent no volumes."),
+            "note": (f"Most points are {size // 60}-minute averages, so single "
+                     "trades may have gone past the highest and lowest. On "
+                     "ranges up to 1W, prices the app saw live are included "
+                     "too. units_traded null means the Wiki sent no volumes."),
         })
         try:
             latest, _bulk, fetched_at, _bulk_5m = self._latest_market()

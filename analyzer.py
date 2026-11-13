@@ -397,17 +397,10 @@ CHART_RANGES = [
 ]
 
 
-def timeseries_rows(points, since: int = 0) -> list:
-    """API timeseries points as range_stats() rows, at or after `since`. A side
-    with no price takes the other side's, as the app stores them."""
-    rows = []
-    for p in points or []:
-        ts, high, low = p.get("timestamp"), p.get("avgHighPrice"), p.get("avgLowPrice")
-        if ts is None or ts < since or (high is None and low is None):
-            continue
-        rows.append((high or low, low or high, ts,
-                     p.get("highPriceVolume"), p.get("lowPriceVolume")))
-    return rows
+def range_includes_live(window: Optional[int]) -> bool:
+    """Whether a chart range shows live snapshots beside the API's averages.
+    Only short ranges do; on long ones they'd just clutter the right edge."""
+    return bool(window and window <= 7 * 86400)
 
 
 def range_stats(rows, step_seconds: int, exempt: bool = False) -> Optional[dict]:
@@ -591,11 +584,12 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
         margin_unknown = prices is None
         margin_held, typical_margin, margin_periods = margin_history(prices, exempt)
 
+    too_good = roi > FLIP_MAX_ROI
     if not active:
         verdict = "Inactive"
     elif net <= 0:
         verdict = "Unprofitable"
-    elif (roi > FLIP_MAX_ROI or reversion.startswith("Extreme")
+    elif (too_good or reversion.startswith("Extreme")
           or not backed_5m):
         verdict = "Suspect"   # too good to be true / possible manipulation
     elif margin_held is not None and margin_held < FLIP_MIN_MARGIN_HELD:
@@ -615,6 +609,8 @@ def flip_row(item: dict, lt: dict, avg: dict, capital: int = 0,
         "slow": active and age > FLIP_SLOW_AGE,
         "affordable": affordable, "verdict": verdict,
         "reversion": reversion, "reversion_pct": round(rev_pct, 1),
+        # ROI over FLIP_MAX_ROI, judged before "roi" is rounded.
+        "too_good": too_good,
         "net_5m": net_5m, "backed_5m": backed_5m,
         "margin_held": margin_held, "typical_margin": typical_margin,
         "margin_periods": margin_periods, "margin_unknown": margin_unknown,

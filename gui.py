@@ -3340,19 +3340,26 @@ class OSRSTrackerApp:
             return None
 
     def _apply_flip_filters(self):
-        """A setting changed: redraw from the last market check."""
-        if self._flip_capital() is None:
-            self.market_status.set(CAPITAL_ERROR)
-            return
-        self._save_settings({
-            "capital": self.flip_capital_var.get().strip(),
+        """A setting changed: save it and redraw from the last market check.
+        A Capital that isn't an amount isn't saved, but the rest still is."""
+        capital_ok = self._flip_capital() is not None
+        values = {
             "flip_membership": self.flip_members_var.get(),
             "flip_hide_inactive": bool(self.flip_hide_inactive_var.get()),
             "flip_price_format": self.flip_format_var.get(),
             "flip_show": self.flip_show_var.get(),
             "flip_traded_within": self.flip_traded_var.get(),
             "flip_min_volume": self.flip_min_volume_var.get(),
-        })
+        }
+        if capital_ok:
+            values["capital"] = self.flip_capital_var.get().strip()
+        self._save_settings(values)
+        if not capital_ok:
+            self.market_status.set(CAPITAL_ERROR)
+            # Show, Hide inactive and Prices need no capital, so the table
+            # can still follow them; the rest waits for a valid one.
+            self._render_fliprec_table()
+            return
         self._show_market_note()
         if not self._market:
             return
@@ -3362,6 +3369,13 @@ class OSRSTrackerApp:
         self._update_tables()
         self._render_watchlist()
         self._notify_targets()
+
+    def _apply_hide_inactive(self):
+        """The Hide inactive box on Settings. It only changes which FlipRec
+        rows show (alerts are never inactive), so it needs no capital."""
+        self._save_settings({"flip_hide_inactive":
+                             bool(self.flip_hide_inactive_var.get())})
+        self._render_fliprec_table()
 
     def _sort_fliprec(self, key: str, default_desc: bool):
         cur_key, cur_desc = self.flip_sort
@@ -3399,10 +3413,13 @@ class OSRSTrackerApp:
             return f"5m margin only {fmt(r['net_5m'])}"
         if r["verdict"] == "Unsteady":
             return f"Held {r['margin_held']}%, usually {fmt(r['typical_margin'])}"
-        if r["verdict"] == "Suspect" and r["roi"] > analyzer.FLIP_MAX_ROI:
-            return f"Suspect: {r['roi']:.0f}% ROI, too good to be true"
+        notes = []
         if r["reversion"]:
-            return f"{r['reversion']} ({r['reversion_pct']:+.1f}%)"
+            notes.append(f"{r['reversion']} ({r['reversion_pct']:+.1f}%)")
+        if r.get("too_good"):
+            notes.append(f"Suspect: ROI over {analyzer.FLIP_MAX_ROI:g}%")
+        if notes:
+            return " · ".join(notes)
         return "History not ready" if r["margin_unknown"] else ""
 
     def _render_fliprec_table(self):
@@ -3523,15 +3540,8 @@ class OSRSTrackerApp:
                       justify="left").pack(anchor="w", padx=(26, 0),
                                            pady=(2, 18))
 
-        def hide_inactive():
-            # Saved first: _apply_flip_filters saves nothing while the
-            # capital on FlipRec isn't a valid amount.
-            self._save_settings({"flip_hide_inactive":
-                                 bool(self.flip_hide_inactive_var.get())})
-            self._apply_flip_filters()
-
         setting("FlipRec", "Hide inactive", self.flip_hide_inactive_var,
-                hide_inactive,
+                self._apply_hide_inactive,
                 "Hides items where one side hasn't traded in the last hour, "
                 "so their margin is likely not real. FlipRec says how many it "
                 "hid. Choosing Inactive in Show lists them anyway.")
@@ -3837,11 +3847,9 @@ class OSRSTrackerApp:
         self._ensure_history_data(item_id, name, step)
 
         since = int(time.time()) - window if window else 0
-        # Live snapshots only make sense on short ranges; on long ranges
-        # they would just clutter the right edge.
         history = db.get_price_range(
             item_id, since, step,
-            include_live=bool(window and window <= 7 * 86400))
+            include_live=analyzer.range_includes_live(window))
 
         if not history:
             self._history_placeholder(

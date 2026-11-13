@@ -3,6 +3,21 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.11 — 2026-11-13
+
+**Fixed**
+- While FlipRec's Capital box holds something that isn't an amount, changes to Show,
+  Traded within, Min Vol, Items and Prices are still saved, and the table still follows
+  Show and Hide inactive. Ticking Hide inactive on Settings no longer shows the Capital
+  error.
+- A FlipRec Note marks an item Suspect for its ROI whenever the verdict did, including
+  an ROI just over 40% that shows as 40.0. An Extreme price swing still shows beside it.
+- Ask AI's numbers for a time range now match the stats beside the Search chart,
+  including prices the app saw live on ranges up to 1W. If the download fails, it
+  answers from what's already stored.
+- Ask AI's log for a time range also records the typical margin, change and buy
+  pressure, and leaves out a side with no prices.
+
 ## 1.6.10 — 2026-11-12
 
 **Fixed**
