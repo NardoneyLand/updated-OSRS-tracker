@@ -1346,6 +1346,7 @@ class OSRSTrackerApp:
         ttk.Label(filters, text="Capital:", style="TLabel"
                   ).pack(side="left", padx=(0, 6))
         self.flip_capital_var = tk.StringVar(value=prefs.get("capital", ""))
+        self._last_good_capital = self._flip_capital()   # see _update_tables
         cap_entry = ttk.Entry(filters, textvariable=self.flip_capital_var, width=12)
         cap_entry.pack(side="left", padx=(0, 16))
         cap_entry.bind("<Return>", lambda _e: self._apply_flip_filters())
@@ -2132,7 +2133,11 @@ class OSRSTrackerApp:
             return
         latest, bulk, _fetched_at, bulk_5m = self._market
         capital = self._flip_capital()
-        if capital is not None:    # otherwise keep the last good numbers
+        if capital is not None:
+            self._last_good_capital = capital
+        else:   # a Capital that isn't an amount: use the last valid one
+            capital = self._last_good_capital
+        if capital is not None:    # never valid: keep the last numbers
             self.flip_results = analyzer.find_flips(
                 latest, bulk, self.item_data, capital=capital,
                 membership=self._flip_membership(), bulk_5m=bulk_5m,
@@ -3356,9 +3361,9 @@ class OSRSTrackerApp:
         self._save_settings(values)
         if not capital_ok:
             self.market_status.set(CAPITAL_ERROR)
-            # Show, Hide inactive and Prices need no capital, so the table
-            # can still follow them; the rest waits for a valid one.
-            self._render_fliprec_table()
+            # The table still follows the other filters (Items included),
+            # worked out with the last valid capital.
+            self._update_tables()
             return
         self._show_market_note()
         if not self._market:
@@ -3406,7 +3411,8 @@ class OSRSTrackerApp:
             self.flip_tree.heading(cid, text=label + (arrow if k == key else ""))
 
     def _flip_note(self, r: dict, fmt) -> str:
-        """The Note column. There's room for one, so the most useful one wins."""
+        """The Note column. It's narrow, so the most useful note comes first:
+        why a row is Suspect leads, as there's no Verdict column to say so."""
         if not r["active"]:
             return "⚠ Inactive: a side idle 1h+"
         if not r["backed_5m"]:
@@ -3414,10 +3420,10 @@ class OSRSTrackerApp:
         if r["verdict"] == "Unsteady":
             return f"Held {r['margin_held']}%, usually {fmt(r['typical_margin'])}"
         notes = []
-        if r["reversion"]:
-            notes.append(f"{r['reversion']} ({r['reversion_pct']:+.1f}%)")
         if r.get("too_good"):
             notes.append(f"Suspect: ROI over {analyzer.FLIP_MAX_ROI:g}%")
+        if r["reversion"]:
+            notes.append(f"{r['reversion']} ({r['reversion_pct']:+.1f}%)")
         if notes:
             return " · ".join(notes)
         return "History not ready" if r["margin_unknown"] else ""
@@ -3808,8 +3814,10 @@ class OSRSTrackerApp:
     def _refresh_history_chart(self):
         """Re-pull API data for the selected item, then redraw."""
         item_id = self.history_item[0] if self.history_item else None
-        self._history_fetched = {k for k in self._history_fetched
-                                 if k[0] != item_id}
+        # Changed in place: Ask AI shares this set, and may add to it from
+        # its own thread (list() copies it in one step).
+        self._history_fetched -= {k for k in list(self._history_fetched)
+                                  if k[0] == item_id}
         self._draw_history_chart()
 
     def _ensure_history_data(self, item_id: int, item_name: str, step: str):
@@ -4084,7 +4092,8 @@ class OSRSTrackerApp:
         frame = ttk.Frame(self.notebook)
         prefs = settings.load()
         self._ai_tools = aitools.MarketTools(lambda: self.item_data,
-                                             self._volume)
+                                             self._volume,
+                                             fetched=self._history_fetched)
         self._ai_chat = None           # the current ai.Chat
         self._ai_cancel = None         # set while a question is running
         self._ai_seq = 0               # latest question (see _ai_send)

@@ -3,6 +3,22 @@
 What's new in each version of OSRS Price Tracker. To update, open
 **Help → Check for updates** in the app.
 
+## 1.6.12 — 2026-11-15
+
+**Fixed**
+- Ask AI no longer says a time range runs into the future when its last point is a price
+  the app saw live.
+- If saving downloaded history fails (the database busy with another write, say), Ask AI
+  still answers a time-range question from what's already stored.
+- Ask AI downloads an item's history once a session, sharing that with the Search chart,
+  so several questions about one item no longer download it again each time.
+- Ask AI is no longer told its time-range numbers always match the chart's stats, which
+  follow the chart's zoom.
+- FlipRec's Note shows why a row is Suspect first, so a price-swing note beside it no
+  longer hides it.
+- While Capital holds something that isn't an amount, changing Items redraws FlipRec
+  for the new choice, using the last valid capital.
+
 ## 1.6.11 — 2026-11-13
 
 **Fixed**

@@ -89,8 +89,10 @@ TOOLS = [
     {
         "name": "get_price_range",
         "description": (
-            "One item's prices and trading over a time range, the same numbers "
-            "shown beside the Search chart: the highest, lowest and average buy "
+            "One item's prices and trading over a whole time range, worked out "
+            "as the Search chart's stats are (the chart's own may differ if "
+            "the user has zoomed it or it loaded earlier): the highest, "
+            "lowest and average buy "
             "and sell prices, units traded each side and in total, the pace per "
             "hour or day, gp traded, buy pressure (the % of units that were "
             "instant buys), the change over the range, the typical margin after "
@@ -329,10 +331,15 @@ class MarketTools:
     """Runs tool calls. get_mapping returns the app's loaded item list."""
 
     def __init__(self, get_mapping: Callable[[], list],
-                 history: Optional[volume.VolumeHistory] = None):
+                 history: Optional[volume.VolumeHistory] = None,
+                 fetched: Optional[set] = None):
         self._get_mapping = get_mapping
         # Without a running history, averages() asks the Wiki directly.
         self._history = history or volume.VolumeHistory()
+        # (item_id, step) whose history was downloaded and stored this
+        # session. The app passes the Search chart's set, so neither
+        # downloads what the other already has.
+        self._fetched = fetched if fetched is not None else set()
         self._market = None        # (latest, bulk_1h, fetched_at, bulk_5m)
         self._checked_at = None    # when this question's oldest prices were fetched
         self._lock = threading.Lock()
@@ -547,11 +554,18 @@ class MarketTools:
         size = api.STEP_SECONDS[step]
         since = int(time.time()) - window if window else 0
         # Stored as the chart stores them, then read back the way the chart
-        # reads them, so both give the same numbers. If the download fails,
-        # what's already stored still answers.
-        db.backfill_price_history(item["id"], item["name"],
-                                  api.get_timeseries(item["id"], timestep=step),
-                                  step)
+        # reads them, so both give the same numbers. Downloaded once a
+        # session, like the chart. If the download or the write fails (the
+        # database busy with another write, say), what's stored still answers.
+        key = (item["id"], step)
+        if key not in self._fetched:
+            try:
+                db.backfill_price_history(
+                    item["id"], item["name"],
+                    api.get_timeseries(item["id"], timestep=step), step)
+                self._fetched.add(key)
+            except Exception:
+                pass
         rows = db.get_price_range(item["id"], since, step,
                                   include_live=analyzer.range_includes_live(window))
         stats = analyzer.range_stats(
@@ -569,10 +583,14 @@ class MarketTools:
         def clock(ts):
             return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
 
+        # An API point covers the step after its timestamp; a live snapshot
+        # (not on a step boundary) is a single moment. Never past now.
+        end = min(max(r[2] + size if r[2] % size == 0 else r[2] for r in rows),
+                  int(time.time()))
         per_hour = stats["per_hour"]
         result.update({
             "minutes_per_point": size // 60,
-            "from": clock(rows[0][2]), "to": clock(rows[-1][2] + size),
+            "from": clock(rows[0][2]), "to": clock(end),
             "buy_price": {"highest": stats["buy_high"], "lowest": stats["buy_low"],
                           "average": stats["buy_avg"]},
             "sell_price": {"highest": stats["sell_high"],
